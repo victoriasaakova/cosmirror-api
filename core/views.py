@@ -1,3 +1,5 @@
+from typing import Optional
+
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
@@ -27,6 +29,44 @@ from .services.geo import GeoLookupError, lookup_place, suggest_places
 from .services.insight import build_insight
 from .services.natal import calculate_sky_now
 from .services.onboarding_astro import build_chart_and_insight
+from .services.personalize import is_personalized, personalize_insight
+
+
+def _quiz_from_session(session: OnboardingSession) -> dict:
+    """Ответы квиза со шага welcome (без контактов)."""
+    answer = (
+        session.answers.filter(step__slug="welcome")
+        .order_by("-updated_at")
+        .first()
+    )
+    if not answer or not isinstance(answer.payload, dict):
+        return {}
+    return answer.payload
+
+
+def _ensure_personalized_insight(
+    *,
+    session: OnboardingSession,
+    natal: dict,
+    insight: dict,
+    chart: Optional[NatalChart] = None,
+) -> dict:
+    if is_personalized(insight):
+        return insight
+
+    personalized = personalize_insight(
+        insight=insight,
+        natal=natal,
+        quiz=_quiz_from_session(session),
+    )
+
+    if chart is not None and chart.chart_data is not None:
+        data = dict(chart.chart_data)
+        data["insight"] = personalized
+        chart.chart_data = data
+        chart.save(update_fields=["chart_data", "updated_at"])
+
+    return personalized
 
 
 
@@ -231,6 +271,7 @@ class OnboardingInsightView(APIView):
     """
     Инсайт онбординга: натал + текущие циклы + что может влиять.
     Если карта уже посчитана — отдаём из NatalChart.chart_data.
+    Тексты персонализируются через Groq (если есть ключ) и кэшируются в chart_data.
     """
 
     permission_classes = [permissions.AllowAny]
@@ -241,22 +282,39 @@ class OnboardingInsightView(APIView):
 
         if chart and chart.status == NatalChart.Status.READY and chart.chart_data:
             data = chart.chart_data
+            natal = {
+                "planets": data.get("planets"),
+                "ascendant": data.get("ascendant"),
+                "midheaven": data.get("midheaven"),
+                "houses": data.get("houses"),
+                "notes": data.get("notes") or [],
+                "location": data.get("location"),
+                "timezone": data.get("timezone"),
+                "engine": data.get("engine"),
+                "has_birth_time": bool(data.get("has_birth_time")),
+            }
             insight = data.get("insight")
             if not insight:
                 insight = build_insight(data, calculate_sky_now())
+            insight = _ensure_personalized_insight(
+                session=session,
+                natal=natal,
+                insight=insight,
+                chart=chart,
+            )
             return Response(
                 {
                     "status": chart.status,
                     "has_birth_time": bool(data.get("has_birth_time")),
                     "natal": {
-                        "planets": data.get("planets"),
-                        "ascendant": data.get("ascendant"),
-                        "midheaven": data.get("midheaven"),
-                        "houses": data.get("houses"),
-                        "notes": data.get("notes") or [],
-                        "location": data.get("location"),
-                        "timezone": data.get("timezone"),
-                        "engine": data.get("engine"),
+                        "planets": natal.get("planets"),
+                        "ascendant": natal.get("ascendant"),
+                        "midheaven": natal.get("midheaven"),
+                        "houses": natal.get("houses"),
+                        "notes": natal.get("notes") or [],
+                        "location": natal.get("location"),
+                        "timezone": natal.get("timezone"),
+                        "engine": natal.get("engine"),
                     },
                     "insight": insight,
                 }
@@ -282,21 +340,29 @@ class OnboardingInsightView(APIView):
         except Exception as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
+        natal = bundle["natal"]
+        insight = _ensure_personalized_insight(
+            session=session,
+            natal=natal,
+            insight=bundle["insight"],
+            chart=chart if chart and chart.status == NatalChart.Status.READY else None,
+        )
+
         return Response(
             {
                 "status": "ready",
-                "has_birth_time": bool(bundle["natal"].get("has_birth_time")),
+                "has_birth_time": bool(natal.get("has_birth_time")),
                 "natal": {
-                    "planets": bundle["natal"].get("planets"),
-                    "ascendant": bundle["natal"].get("ascendant"),
-                    "midheaven": bundle["natal"].get("midheaven"),
-                    "houses": bundle["natal"].get("houses"),
-                    "notes": bundle["natal"].get("notes") or [],
-                    "location": bundle["natal"].get("location"),
-                    "timezone": bundle["natal"].get("timezone"),
-                    "engine": bundle["natal"].get("engine"),
+                    "planets": natal.get("planets"),
+                    "ascendant": natal.get("ascendant"),
+                    "midheaven": natal.get("midheaven"),
+                    "houses": natal.get("houses"),
+                    "notes": natal.get("notes") or [],
+                    "location": natal.get("location"),
+                    "timezone": natal.get("timezone"),
+                    "engine": natal.get("engine"),
                 },
-                "insight": bundle["insight"],
+                "insight": insight,
             }
         )
 

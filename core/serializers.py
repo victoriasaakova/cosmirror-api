@@ -131,10 +131,11 @@ class OnboardingSessionSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_next_step(self, obj: OnboardingSession):
-        answered_ids = set(obj.answers.values_list("step_id", flat=True))
+        # Незавершённые ответы (completed=false) — ещё текущий шаг, не пропускаем.
+        done_ids = set(obj.answers.filter(completed=True).values_list("step_id", flat=True))
         nxt = (
             OnboardingStep.objects.filter(is_active=True)
-            .exclude(id__in=answered_ids)
+            .exclude(id__in=done_ids)
             .order_by("order", "id")
             .first()
         )
@@ -194,10 +195,12 @@ class OnboardingStepSubmitSerializer(serializers.Serializer):
             defaults={"payload": payload, "completed": completed},
         )
 
-        if step.step_type == OnboardingStep.StepType.BIRTH_DATA:
-            self._apply_birth_data(session, payload)
-        elif step.step_type == OnboardingStep.StepType.WAITLIST:
-            self._apply_waitlist(session, payload)
+        # Тяжёлые сайд-эффекты только при завершении шага.
+        if completed:
+            if step.step_type == OnboardingStep.StepType.BIRTH_DATA:
+                self._apply_birth_data(session, payload)
+            elif step.step_type == OnboardingStep.StepType.WAITLIST:
+                self._apply_waitlist(session, payload)
 
         update_fields = ["current_step_slug", "updated_at", *dict.fromkeys(self._session_extra_fields)]
         session.current_step_slug = step.slug

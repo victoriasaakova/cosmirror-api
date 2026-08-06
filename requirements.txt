@@ -6,3 +6,4 @@ skyfield>=1.49
 timezonefinder>=6.5
 tzdata>=2024.1
 gunicorn>=22.0
+groq>=0.11

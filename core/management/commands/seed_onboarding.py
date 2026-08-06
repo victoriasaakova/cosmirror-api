@@ -12,6 +12,10 @@ DEFAULT_STEPS = [
         "order": 10,
         "is_required": True,
         "fields_schema": {},
+        # ui=profile_quiz → фронт рендерит мульти-экранный квиз.
+        # Можно заменить на meta.screens=[...] без деплоя фронта для опций,
+        # или добавить новый шаг с другим step_type / meta.ui.
+        "meta": {"ui": "profile_quiz"},
     },
     {
         "slug": "birth",
@@ -28,6 +32,7 @@ DEFAULT_STEPS = [
             "birth_lng": {"type": "number", "required": False},
             "timezone": {"type": "string", "required": False},
         },
+        "meta": {},
     },
     {
         "slug": "contacts",
@@ -42,6 +47,7 @@ DEFAULT_STEPS = [
             "email": {"type": "email", "required": False},
             "name": {"type": "string", "required": False},
         },
+        "meta": {},
     },
 ]
 
@@ -63,6 +69,7 @@ class Command(BaseCommand):
                     "is_required": data["is_required"],
                     "is_active": True,
                     "fields_schema": data["fields_schema"],
+                    "meta": data.get("meta") or {},
                 },
             )
             if was_created:

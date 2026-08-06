@@ -54,7 +54,8 @@ Payload шага `birth`:
 - `birth_place` обязателен (или lat/lng).
 - Без `birth_time` — Солнце/Луна/планеты считаются, Asc/дома не отдаём.
 - Инсайт: готовые тексты в духе The Pattern, не LLM.
-
+  С `GROQ_API_KEY` тексты + оффер персонализируются через Groq и кэшируются в `NatalChart.chart_data`.
+  Без ключа — шаблоны + дефолтный оффер из фокуса квиза.
 ## Domain
 
 | Сущность | Зачем |
@@ -87,9 +88,11 @@ Payload шага `birth`:
 ### Онбординг (флоу)
 
 1. `POST /api/onboarding/sessions/` → сохранить `token` (localStorage)
-2. `GET /api/onboarding/steps/` → роуты `/onboarding/welcome/`, `/onboarding/birth/`, …
-3. На каждом экране `PUT .../steps/<slug>/` с `payload`
-4. Шаг `birth` → пишет birth_* в сессию + создаёт `NatalChart(pending)`
-5. Шаг `contacts` → создаёт/обновляет `WaitlistLead`
+2. `GET /api/onboarding/steps/` → фронт строит роуты из `url_path` (`/onboarding/welcome/`, `/onboarding/birth/`, …)
+3. На каждом URL `PUT .../steps/<slug>/` с `payload`
+4. Шаг `birth_data` → пишет birth_* в сессию + считает `NatalChart`
+5. Шаг `waitlist` → создаёт/обновляет `WaitlistLead` → фронт открывает `/onboarding/insight/`
 
-Новые шаги добавляются в админке — без деплоя фронтовых констант порядка (фронт читает `order` + `slug`).
+Новые шаги добавляются в админке (`slug`, `order`, `step_type`, опционально `meta.ui` / `meta.screens`) —
+фронт читает список с API и не хардкодит порядок. Рендер идёт по `step_type`
+(`content` / `birth_data` / `waitlist` / …), а не по конкретному slug.
