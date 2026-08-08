@@ -58,10 +58,10 @@ SYSTEM_PROMPT = f"""\
 Ты редактор психологических текстов для продукта Cosmirror (астро-психология без эзотерического пафоса).
 
 Задача: подготовить тексты онбординг-воронки после квиза:
-1) первый экран разбора: opening + body — психологический ПОРТРЕТ паттернов;
+1) первый экран разбора: opening + body — короткий психологический ПОРТРЕТ (один экран);
 2) переписать influences и cycles (кратко, лично, про поведение, не про знаки);
-3) один продающий экран product_pitch — какие паттерны у человека и чем Cosmirror поможет;
-4) экран outcomes с наглядными карточками динамики через неделю;
+3) продающий экран product_pitch: сначала ЧТО делает продукт, затем как помогает ЭТОМУ человеку;
+4) экран outcomes с карточками динамики через неделю;
 5) финальный оффер.
 
 Правила:
@@ -73,26 +73,27 @@ SYSTEM_PROMPT = f"""\
   «Солнце в …», «Луна в …», «Асцендент в …», перечисления знаков и «карта говорит».
   Пиши про наблюдаемые паттерны поведения, энергии, выбора и отношений.
 
-Первый экран (opening + body) — портрет:
+Первый экран (opening + body) — короткий портрет на ОДИН экран телефона:
 - opening.bridge: выбери РОВНО одну фразу из списка (дословно):
 {json.dumps(OPENING_BRIDGES, ensure_ascii=False)}
 - opening.insight: продолжение после «что» — главная мягкая рекомендация/наблюдение.
   Бери смысл из title первого influence (переформулируй как клаузу, без заглавной буквы).
   Пример: title «Тяга выйти из тесной роли» → insight «пора выйти из тесной роли».
-  До 90 символов. Читается как: «Имя, {{bridge}} {{insight}}».
-- body: один абзац-портрет, 4–6 предложений, до ~700 символов.
-  Склей квиз (этап/фокус/цель) с influences в живой портрет: как человек обычно устроен,
-  где застревает, что сейчас громче. Без каталога планет и знаков.
-  ЗАПРЕЩЕНО: списки ответов квиза; дословные focus_labels / intent_label / life_stage_label;
+  До 80 символов. Читается как: «Имя, {{bridge}} {{insight}}».
+- body: РОВНО 2–3 коротких предложения, до ~280 символов.
+  Один сфокусированный паттерн + мягкий вывод. Без «литературного романа».
+  ЗАПРЕЩЕНО: 4+ предложений; списки ответов квиза; дословные focus_labels / intent_label;
   «сейчас: …», «в фокусе — …», «цель: …»; дублировать opening.insight.
 
 Остальное:
-- influences/cycles: key НЕ МЕНЯЙ; title до 60 символов; text до ~280 символов.
+- influences/cycles: key НЕ МЕНЯЙ; title до 60 символов; text до ~200 символов.
   Title/text — про паттерн и опыт, не «Солнце в X».
-- product_pitch: экран «что у тебя происходит и чем Cosmirror поможет».
-  title до 70 символов — про паттерн/напряжение/фокус человека, НЕ про планеты.
-  text 2–3 предложения: назвать его повторяющийся сценарий + как продукт свяжет
-  карту/циклы/фокус, чтобы это увидеть раньше и выбирать иначе. Без Солнца/Луны/Асцендента в тексте.
+- product_pitch: ЭТО ПРОДАЖА ПРОДУКТА, не второй инсайт и не продолжение разбора.
+  title (до 70): что ДЕЛАЕТ Cosmirror (функция продукта). Примеры тона:
+  «Связываем карту, циклы и твои реакции», «Показываем повторяющиеся сценарии раньше».
+  Не пиши в title диагноз/портрет человека («Когда привычная роль уже тесна…»).
+  text (1–2 предложения, до ~220 символов): как это помогает ИМЕННО этому человеку —
+  через его фокус/паттерн из квиза. Без Солнца/Луны/Асцендента.
 - outcomes: title до 80 символов; cards — РОВНО 4 карточки метрик.
   Каждая card: key (латиница), label (1–2 слова), before/after («32%»), hint до 60 символов.
   after всегда выше before.
@@ -102,10 +103,13 @@ SYSTEM_PROMPT = f"""\
 Верни ТОЛЬКО JSON:
 {{
   "opening": {{"bridge": "сейчас пространство показывает, что", "insight": "пора выйти из тесной роли"}},
-  "body": "Один связный абзац-портрет без названий знаков...",
+  "body": "Два-три коротких предложения портрета.",
   "influences": [{{"key": "...", "title": "...", "text": "..."}}],
   "cycles": [{{"key": "...", "title": "...", "text": "..."}}],
-  "product_pitch": {{"title": "...", "text": "..."}},
+  "product_pitch": {{
+    "title": "Связываем карту, циклы и твои реакции",
+    "text": "В теме работы и выбора увидишь, где привычный порядок держит тебя дольше, чем нужно — и где появляется пространство для другого шага."
+  }},
   "outcomes": {{
     "title": "...",
     "cards": [
@@ -162,7 +166,7 @@ def is_personalized(insight: Optional[dict[str, Any]]) -> bool:
     """
     if not _has_funnel_structure(insight):
         return False
-    if int((insight or {}).get("funnel_version") or 1) < 3:
+    if int((insight or {}).get("funnel_version") or 1) < 4:
         return False
     source = str((insight or {}).get("source") or "")
     if source in ("", "templates"):
@@ -334,31 +338,16 @@ def default_body(quiz: dict[str, Any], influences: list[dict[str, Any]]) -> str:
     primary = focus_keys[0] if focus_keys else "path"
     focus_label = FOCUS_LABELS.get(primary, FOCUS_LABELS["path"])
     intent_label = INTENT_LABELS.get(str(quiz.get("intent") or ""), INTENT_LABELS["other"])
-    life_stage = str(quiz.get("life_stage") or quiz.get("lifeStage") or "")
-    life_label = LIFE_STAGE_LABELS.get(life_stage, "")
 
     primary_inf = influences[0] if influences else {}
     inf_text = str(primary_inf.get("text") or "").strip()
-
-    lead = (
-        f"Сейчас особенно заметно, где привычная роль стала тесной — особенно в теме «{focus_label}». "
-        if primary == "money"
-        else "Сейчас особенно заметно, где привычная роль перестала давать опору. "
-    )
-    if life_label:
-        lead = (
-            f"Когда {life_label}, в центре внимания оказывается «{focus_label}». "
-            f"Чтобы {intent_label}, важно честно назвать, что уже не работает. "
-        )
-    parts = [lead]
     if inf_text:
-        parts.append(inf_text)
-    else:
-        parts.append(
-            "Не нужно резко всё менять: сначала полезно назвать то, что больше не подходит — "
-            "и дать себе право выбирать иначе."
-        )
-    return " ".join(parts)[:800]
+        short = inf_text.split(".")[0].strip()
+        return f"{short}. Чтобы {intent_label}, важно сначала назвать, что уже не даёт опоры в теме «{focus_label}»."[:320]
+    return (
+        f"Сейчас особенно заметно, где привычная роль стала тесной в теме «{focus_label}». "
+        f"Чтобы {intent_label}, полезно честно увидеть, что больше не работает."
+    )[:320]
 
 
 def default_outcomes(quiz: dict[str, Any]) -> dict[str, Any]:
@@ -410,15 +399,12 @@ def default_product_pitch(
     focus_keys = [str(f) for f in focus if f]
     focus_label = FOCUS_LABELS.get(focus_keys[0], "жизни") if focus_keys else "жизни"
     intent_label = INTENT_LABELS.get(str(quiz.get("intent") or ""), INTENT_LABELS["other"])
-    title = f"Увидеть свой паттерн в теме «{focus_label}»"
-    cycle_hint = ""
-    if cycles:
-        cycle_hint = f" На фоне сейчас громче «{cycles[0].get('title', 'текущий цикл')}»."
+    title = "Связываем карту, циклы и твои реакции"
     text = (
-        f"Cosmirror помогает заметить, как повторяющиеся сценарии сходятся с фокусом «{focus_label}», "
-        f"чтобы {intent_label}.{cycle_hint} Не общий гороскоп — разбор того, что уже происходит у тебя."
+        f"В теме «{focus_label}» покажем повторяющийся сценарий раньше — "
+        f"чтобы {intent_label}, а не снова действовать на автомате."
     )
-    return {"title": title[:120], "text": text[:500]}
+    return {"title": title[:90], "text": text[:280]}
 
 
 def default_cycle_pitches(cycles: list[dict[str, Any]], quiz: dict[str, Any]) -> list[dict[str, str]]:
@@ -473,7 +459,7 @@ def _with_templates(
     out["product_pitch"] = default_product_pitch(cycles, quiz, natal)
     out["outcomes"] = default_outcomes(quiz)
     out["offer"] = offer
-    out["funnel_version"] = 3
+    out["funnel_version"] = 4
     out["source"] = "templates"
     return out
 
@@ -547,7 +533,7 @@ def _merge_llm_result(
 
     body = str(rewritten.get("body") or "").strip()
     if len(body) >= 60:
-        out["body"] = body[:900]
+        out["body"] = body[:320]
     elif require_llm_fields:
         missing.append("body")
     else:
@@ -560,7 +546,7 @@ def _merge_llm_result(
         p_title = str(pitch_raw.get("title") or "").strip()
         p_text = str(pitch_raw.get("text") or "").strip()
         if p_title and p_text:
-            out["product_pitch"] = {"title": p_title[:120], "text": p_text[:500]}
+            out["product_pitch"] = {"title": p_title[:90], "text": p_text[:280]}
     if not out.get("product_pitch"):
         if require_llm_fields:
             missing.append("product_pitch")
@@ -625,7 +611,7 @@ def _merge_llm_result(
         raise ValueError(f"LLM response missing required fields: {', '.join(missing)}")
 
     out["tone"] = "pattern_psych_llm"
-    out["funnel_version"] = 3
+    out["funnel_version"] = 4
     out["source"] = source
     if not out.get("disclaimer"):
         out["disclaimer"] = base_insight.get("disclaimer") or (

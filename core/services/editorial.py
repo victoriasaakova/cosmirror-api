@@ -45,9 +45,11 @@ EDIT_TASK = """\
 - Верни ТОЛЬКО JSON того же shape, что на входе.
 - opening.bridge — НЕ меняй (это фиксированная связка из списка).
 - opening.insight — отредактируй смысл, оставь строчную клаузу после «что», до 90 символов.
-- body — один абзац-портрет, 4–6 предложений (короче full Deep Insight), без названий знаков.
+- body — 2–3 коротких предложения, до ~280 символов; помещается на один экран; без названий знаков.
 - influences / cycles: key НЕ МЕНЯЙ; title и text можно переписать (про паттерн, не про знак).
-- product_pitch: title до 70 символов; text 2–3 предложения про паттерн человека и помощь Cosmirror.
+- product_pitch: ПРОДАЖА, не второй инсайт.
+  title — что делает Cosmirror (функция продукта), до 70 символов.
+  text — 1–2 предложения, как помогает этому человеку через его паттерн/фокус.
 - outcomes.cards: key НЕ МЕНЯЙ; label/before/after/hint можно переписать; after > before.
 - offer.title оставь ТОЧНО «Стань ближе к своему истинному я через подробный разбор»;
   cta ТОЧНО «Получить за 777»; price ТОЧНО «777 ₽/мес»; text — 2 строки через \\n.
@@ -99,7 +101,7 @@ def merge_edited_copy(insight: dict[str, Any], edited: dict[str, Any]) -> dict[s
 
     body = str(edited.get("body") or "").strip()
     if len(body) >= 40:
-        out["body"] = body[:1000]
+        out["body"] = body[:320]
 
     for section in ("influences", "cycles"):
         if isinstance(edited.get(section), list) and isinstance(out.get(section), list):
@@ -111,7 +113,7 @@ def merge_edited_copy(insight: dict[str, Any], edited: dict[str, Any]) -> dict[s
         p_title = str(pitch.get("title") or base_pitch.get("title") or "").strip()
         p_text = str(pitch.get("text") or base_pitch.get("text") or "").strip()
         if p_title and p_text:
-            out["product_pitch"] = {"title": p_title[:120], "text": p_text[:500]}
+            out["product_pitch"] = {"title": p_title[:90], "text": p_text[:280]}
 
     outcomes = edited.get("outcomes")
     if isinstance(outcomes, dict):
