@@ -26,7 +26,7 @@ USER_FACING_INSIGHT_KEYS = (
     "body",
     "influences",
     "cycles",
-    "cycle_pitches",
+    "product_pitch",
     "outcomes",
     "offer",
 )
@@ -42,11 +42,11 @@ EDIT_TASK = """\
 - opening.bridge — НЕ меняй (это фиксированная связка из списка).
 - opening.insight — отредактируй смысл, оставь строчную клаузу после «что», до 90 символов.
 - body — один абзац, 4–6 предложений; формат onboarding deep insight (короче full Deep Insight).
-- influences / cycles: key и cycle_key НЕ МЕНЯЙ; title и text можно переписать.
-- cycle_pitches: cycle_key НЕ МЕНЯЙ.
-- offer.title оставь ТОЧНО «Стань ближе к своему истинному я»; price ТОЧНО «777 ₽/мес»;
-  cta можно слегка уточнить; text — по редакционной системе.
-- outcomes.items — 4 фразы результата через ~неделю, без чек-листного пафоса.
+- influences / cycles: key НЕ МЕНЯЙ; title и text можно переписать.
+- product_pitch: title до 70 символов; text 2–3 предложения.
+- outcomes.cards: key НЕ МЕНЯЙ; label/before/after/hint можно переписать; after > before.
+- offer.title оставь ТОЧНО «Стань ближе к своему истинному я через подробный разбор»;
+  cta ТОЧНО «Получить за 777»; price ТОЧНО «777 ₽/мес»; text — 2 строки через \\n.
 - Не добавляй новых ключей. Не удаляй существующие элементы списков.
 - Имя пользователя в текстах не пиши (его покажут отдельно).
 - Язык: русский. Обращение на «ты».
@@ -101,21 +101,46 @@ def merge_edited_copy(insight: dict[str, Any], edited: dict[str, Any]) -> dict[s
         if isinstance(edited.get(section), list) and isinstance(out.get(section), list):
             out[section] = _merge_keyed_items(out[section], edited[section], key_field="key")
 
-    if isinstance(edited.get("cycle_pitches"), list) and isinstance(out.get("cycle_pitches"), list):
-        out["cycle_pitches"] = _merge_keyed_items(
-            out["cycle_pitches"],
-            edited["cycle_pitches"],
-            key_field="cycle_key",
-        )
+    if isinstance(edited.get("product_pitch"), dict):
+        pitch = edited["product_pitch"]
+        base_pitch = out.get("product_pitch") if isinstance(out.get("product_pitch"), dict) else {}
+        p_title = str(pitch.get("title") or base_pitch.get("title") or "").strip()
+        p_text = str(pitch.get("text") or base_pitch.get("text") or "").strip()
+        if p_title and p_text:
+            out["product_pitch"] = {"title": p_title[:120], "text": p_text[:500]}
 
     outcomes = edited.get("outcomes")
     if isinstance(outcomes, dict):
         title = str(outcomes.get("title") or "").strip()
-        items = outcomes.get("items")
-        if title and isinstance(items, list):
-            clean = [str(i).strip() for i in items if str(i).strip()][:6]
-            if clean:
-                out["outcomes"] = {"title": title[:120], "items": clean}
+        cards = outcomes.get("cards")
+        if title and isinstance(cards, list):
+            merged_cards: list[dict[str, str]] = []
+            base_cards = (
+                (out.get("outcomes") or {}).get("cards")
+                if isinstance(out.get("outcomes"), dict)
+                else []
+            ) or []
+            for idx, card in enumerate(cards[:4]):
+                if not isinstance(card, dict):
+                    continue
+                base = base_cards[idx] if idx < len(base_cards) and isinstance(base_cards[idx], dict) else {}
+                key = str(card.get("key") or base.get("key") or f"metric_{idx}")
+                label = str(card.get("label") or base.get("label") or "").strip()
+                before = str(card.get("before") or base.get("before") or "").strip()
+                after = str(card.get("after") or base.get("after") or "").strip()
+                hint = str(card.get("hint") or base.get("hint") or "").strip()
+                if label and before and after:
+                    merged_cards.append(
+                        {
+                            "key": key[:40],
+                            "label": label[:40],
+                            "before": before[:12],
+                            "after": after[:12],
+                            "hint": hint[:80],
+                        }
+                    )
+            if len(merged_cards) >= 4:
+                out["outcomes"] = {"title": title[:120], "cards": merged_cards}
 
     offer = edited.get("offer")
     if isinstance(offer, dict) and isinstance(out.get("offer"), dict):
@@ -123,9 +148,9 @@ def merge_edited_copy(insight: dict[str, Any], edited: dict[str, Any]) -> dict[s
         text = str(offer.get("text") or base.get("text") or "").strip()
         cta = str(offer.get("cta") or base.get("cta") or "").strip()
         out["offer"] = {
-            "title": "Стань ближе к своему истинному я",
+            "title": "Стань ближе к своему истинному я через подробный разбор",
             "text": text[:500] if text else base.get("text", ""),
-            "cta": (cta or base.get("cta") or "Оформить подписку")[:60],
+            "cta": "Получить за 777",
             "price": "777 ₽/мес",
         }
 

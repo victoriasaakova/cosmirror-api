@@ -183,15 +183,14 @@ def _build_default_steps():
         {
             "slug": "contacts",
             "title": "Контакты",
-            "subtitle": "Email, телефон и Telegram для waitlist",
+            "subtitle": "Email и Telegram для waitlist",
             "step_type": OnboardingStep.StepType.WAITLIST,
             "order": order,
             "is_required": True,
             "is_active": True,
             "fields_schema": {
-                "telegram": {"type": "string", "required": False},
-                "phone": {"type": "string", "required": False},
-                "email": {"type": "email", "required": False},
+                "telegram": {"type": "string", "required": True},
+                "email": {"type": "email", "required": True},
                 "name": {"type": "string", "required": False},
             },
             "meta": {},

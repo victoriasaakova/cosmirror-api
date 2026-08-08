@@ -60,9 +60,9 @@ SYSTEM_PROMPT = f"""\
 Задача: подготовить тексты онбординг-воронки после квиза:
 1) первый экран разбора: opening + body;
 2) переписать influences и cycles (кратко, лично);
-3) два продающих экрана по двум фоновым циклам;
-4) экран «что отмечают пользователи» через неделю;
-5) финальный оффер подписки.
+3) один продающий экран product_pitch — что Cosmirror делает для ЭТОГО пользователя;
+4) экран outcomes с наглядными карточками динамики через неделю;
+5) финальный оффер.
 
 Правила:
 - Язык: русский.
@@ -85,10 +85,14 @@ SYSTEM_PROMPT = f"""\
 
 Остальное:
 - influences/cycles: key НЕ МЕНЯЙ; title до 60 символов; text до ~280 символов.
-- cycle_pitches: РОВНО 2 элемента по первым двум cycles.
-  title до 70 символов; text 2–3 предложения: фон + как Cosmirror поможет.
-- outcomes: title до 80 символов; items — 4 фразы про результат через ~неделю.
-- offer: title ТОЧНО «Стань ближе к своему истинному я»; text 1–2 предложения; cta до 40 символов; price ТОЧНО «777 ₽/мес».
+- product_pitch: один экран продажи Cosmirror для этого пользователя.
+  title до 70 символов (можно упомянуть натальную карту); text 2–3 предложения, крупно и по делу.
+  Свяжи фокус квиза, intent, натальную карту и текущие cycles. Без длинных абзацев.
+- outcomes: title до 80 символов; cards — РОВНО 4 карточки метрик для визуального экрана.
+  Каждая card: key (латиница), label (коротко, 1–2 слова), before и after (проценты вида «32%»),
+  hint — одна фраза что изменится (до 60 символов). after всегда выше before.
+- offer: title ТОЧНО «Стань ближе к своему истинному я через подробный разбор»;
+  text — 2 строки через \\n: что получит в разборе; cta ТОЧНО «Получить за 777»; price ТОЧНО «777 ₽/мес».
 
 Верни ТОЛЬКО JSON:
 {{
@@ -96,18 +100,26 @@ SYSTEM_PROMPT = f"""\
   "body": "Один связный абзац разбора...",
   "influences": [{{"key": "...", "title": "...", "text": "..."}}],
   "cycles": [{{"key": "...", "title": "...", "text": "..."}}],
-  "cycle_pitches": [
-    {{"cycle_key": "...", "title": "...", "text": "..."}},
-    {{"cycle_key": "...", "title": "...", "text": "..."}}
-  ],
-  "outcomes": {{"title": "...", "items": ["...", "..."]}},
-  "offer": {{"title": "Стань ближе к своему истинному я", "text": "...", "cta": "...", "price": "777 ₽/мес"}}
+  "product_pitch": {{"title": "...", "text": "..."}},
+  "outcomes": {{
+    "title": "...",
+    "cards": [
+      {{"key": "clarity", "label": "Ясность", "before": "32%", "after": "81%", "hint": "видишь, что даёт энергию"}},
+      {{"key": "patterns", "label": "Паттерны", "before": "24%", "after": "76%", "hint": "замечаешь повторения раньше"}}
+    ]
+  }},
+  "offer": {{
+    "title": "Стань ближе к своему истинному я через подробный разбор",
+    "text": "Персональный разбор под твою карту.\\nОтслеживание энергии и паттернов.",
+    "cta": "Получить за 777",
+    "price": "777 ₽/мес"
+  }}
 }}
 """
 
 
 def _has_funnel_structure(insight: Optional[dict[str, Any]]) -> bool:
-    """Есть opening + body + pitches + offer — структура воронки собрана."""
+    """Есть opening + body + product_pitch + outcomes + offer."""
     if not isinstance(insight, dict):
         return False
     offer = insight.get("offer")
@@ -115,8 +127,18 @@ def _has_funnel_structure(insight: Optional[dict[str, Any]]) -> bool:
         return False
     if not (str(offer.get("title") or "").strip() and str(offer.get("text") or "").strip()):
         return False
-    pitches = insight.get("cycle_pitches")
-    if not (isinstance(pitches, list) and len(pitches) >= 2):
+    pitch = insight.get("product_pitch")
+    if not isinstance(pitch, dict):
+        return False
+    if not (str(pitch.get("title") or "").strip() and str(pitch.get("text") or "").strip()):
+        return False
+    outcomes = insight.get("outcomes")
+    cards_ok = (
+        isinstance(outcomes, dict)
+        and isinstance(outcomes.get("cards"), list)
+        and len(outcomes.get("cards") or []) >= 4
+    )
+    if not cards_ok:
         return False
     opening = insight.get("opening")
     body = str(insight.get("body") or "").strip()
@@ -129,14 +151,18 @@ def _has_funnel_structure(insight: Optional[dict[str, Any]]) -> bool:
 
 def is_personalized(insight: Optional[dict[str, Any]]) -> bool:
     """
-    Готовый инсайт: структура воронки есть.
-    Для LLM-источников дополнительно требуется editorial_passed
-    (второй проход через Cosmirror Editorial Writing System).
+    Готовый инсайт: структура воронки v2 есть.
+    Шаблоны не финал, если LLM настроен — перегенерируем.
+    Для LLM-источников дополнительно требуется editorial_passed.
     """
     if not _has_funnel_structure(insight):
         return False
+    if int((insight or {}).get("funnel_version") or 1) < 2:
+        return False
     source = str((insight or {}).get("source") or "")
     if source in ("", "templates"):
+        if llm_client.is_configured():
+            return False
         return True
     return bool((insight or {}).get("editorial_passed"))
 
@@ -167,18 +193,38 @@ def personalize_insight(
             return _apply_editorial(base_insight, natal=natal, quiz=quiz)
 
     if not llm_client.is_configured():
-        return _with_templates(base_insight, offer, quiz)
+        return _with_templates(base_insight, offer, quiz, natal)
 
     try:
         rewritten = _call_llm(base_insight, natal, quiz)
+        provider = llm_client.active_provider() or "llm"
+        merged = _merge_llm_result(
+            base_insight,
+            rewritten,
+            offer_fallback=offer,
+            quiz=quiz,
+            natal=natal,
+            source=provider,
+            require_llm_fields=True,
+        )
     except Exception:
-        logger.warning("Insight personalization failed; using templates", exc_info=False)
-        return _with_templates(base_insight, offer, quiz)
+        logger.warning("Insight personalization failed; retrying once", exc_info=False)
+        try:
+            rewritten = _call_llm(base_insight, natal, quiz)
+            provider = llm_client.active_provider() or "llm"
+            merged = _merge_llm_result(
+                base_insight,
+                rewritten,
+                offer_fallback=offer,
+                quiz=quiz,
+                natal=natal,
+                source=provider,
+                require_llm_fields=True,
+            )
+        except Exception:
+            logger.warning("Insight personalization failed; using templates", exc_info=False)
+            return _with_templates(base_insight, offer, quiz, natal)
 
-    provider = llm_client.active_provider() or "llm"
-    merged = _merge_llm_result(
-        base_insight, rewritten, offer_fallback=offer, quiz=quiz, source=provider
-    )
     return _apply_editorial(merged, natal=natal, quiz=quiz)
 
 
@@ -219,14 +265,13 @@ def default_offer(quiz: dict[str, Any]) -> dict[str, str]:
     focus_label = FOCUS_LABELS.get(primary, FOCUS_LABELS["path"])
     intent_label = INTENT_LABELS.get(str(quiz.get("intent") or ""), INTENT_LABELS["other"])
     name = (quiz.get("name") or "").strip()
-    who = f"{name}, " if name else ""
     return {
-        "title": "Стань ближе к своему истинному я",
+        "title": "Стань ближе к своему истинному я через подробный разбор",
         "text": (
-            f"{who}персональный разбор поможет увидеть, как фон циклов пересекается с темой «{focus_label}» — "
-            f"чтобы {intent_label} без общих гороскопов."
+            f"Персональный разбор под твою карту и тему «{focus_label}».\n"
+            f"Отслеживание энергии, паттернов и циклов — чтобы {intent_label}."
         ),
-        "cta": "Оформить подписку",
+        "cta": "Получить за 777",
         "price": "777 ₽/мес",
     }
 
@@ -316,13 +361,63 @@ def default_outcomes(quiz: dict[str, Any]) -> dict[str, Any]:
     title = f"{name}, что меняется уже через неделю" if name else "Что меняется уже через неделю"
     return {
         "title": title,
-        "items": [
-            "Понимаешь, что даёт энергию, а что её забирает",
-            "Видишь свои сильные стороны и как их масштабировать",
-            "Замечаешь повторяющиеся сценарии до того, как они снова уведут в круг",
-            "Легче выбирать решения, которые ближе к твоему ритму",
+        "cards": [
+            {
+                "key": "clarity",
+                "label": "Ясность",
+                "before": "32%",
+                "after": "81%",
+                "hint": "видишь, что даёт энергию",
+            },
+            {
+                "key": "patterns",
+                "label": "Паттерны",
+                "before": "24%",
+                "after": "76%",
+                "hint": "замечаешь повторения раньше",
+            },
+            {
+                "key": "strengths",
+                "label": "Сильные стороны",
+                "before": "38%",
+                "after": "84%",
+                "hint": "понимаешь, что масштабировать",
+            },
+            {
+                "key": "rhythm",
+                "label": "Свой ритм",
+                "before": "29%",
+                "after": "79%",
+                "hint": "легче выбирать решения",
+            },
         ],
     }
+
+
+def default_product_pitch(
+    cycles: list[dict[str, Any]],
+    quiz: dict[str, Any],
+    natal: Optional[dict[str, Any]] = None,
+) -> dict[str, str]:
+    focus = quiz.get("focus") or []
+    if isinstance(focus, str):
+        focus = [focus]
+    focus_keys = [str(f) for f in focus if f]
+    focus_label = FOCUS_LABELS.get(focus_keys[0], "жизни") if focus_keys else "жизни"
+    intent_label = INTENT_LABELS.get(str(quiz.get("intent") or ""), INTENT_LABELS["other"])
+    natal = natal or {}
+    planets = natal.get("planets") or {}
+    sun = planets.get("sun") or {}
+    sun_ru = str(sun.get("sign_ru") or "").strip()
+    title = f"Cosmirror для твоей карты{f' · Солнце в {sun_ru}' if sun_ru else ''}"
+    cycle_hint = ""
+    if cycles:
+        cycle_hint = f" Сейчас в фоне — «{cycles[0].get('title', 'цикл')}»."
+    text = (
+        f"Свяжем натальную карту, текущие циклы и твой фокус «{focus_label}», "
+        f"чтобы {intent_label}.{cycle_hint} Без общих гороскопов — только то, что относится к тебе."
+    )
+    return {"title": title[:120], "text": text[:500]}
 
 
 def default_cycle_pitches(cycles: list[dict[str, Any]], quiz: dict[str, Any]) -> list[dict[str, str]]:
@@ -362,16 +457,22 @@ def default_cycle_pitches(cycles: list[dict[str, Any]], quiz: dict[str, Any]) ->
     return [first, second]
 
 
-def _with_templates(insight: dict[str, Any], offer: dict[str, str], quiz: dict[str, Any]) -> dict[str, Any]:
+def _with_templates(
+    insight: dict[str, Any],
+    offer: dict[str, str],
+    quiz: dict[str, Any],
+    natal: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     out = copy.deepcopy(insight) if insight else {}
     out.setdefault("tone", "pattern_psych")
     cycles = out.get("cycles") or []
     influences = out.get("influences") or []
     out["opening"] = default_opening(quiz, influences)
     out["body"] = default_body(quiz, influences)
-    out["cycle_pitches"] = default_cycle_pitches(cycles, quiz)
+    out["product_pitch"] = default_product_pitch(cycles, quiz, natal)
     out["outcomes"] = default_outcomes(quiz)
     out["offer"] = offer
+    out["funnel_version"] = 2
     out["source"] = "templates"
     return out
 
@@ -395,8 +496,8 @@ def _call_llm(
     }
     user = (
         "Перепиши блоки и собери оффер по этим данным.\n"
-        "Первый экран: opening (bridge из списка + insight из title первого influence) "
-        "и body (один абзац: цель квиза + рекомендация из influences).\n\n"
+        "Экран 1: opening + body. Экран 2: product_pitch. Экран 3: outcomes.cards (4 метрики). "
+        "Экран 4: offer.\n\n"
         + json.dumps(payload, ensure_ascii=False)
     )
     return llm_client.chat_json(system=SYSTEM_PROMPT, user=user)
@@ -408,10 +509,13 @@ def _merge_llm_result(
     *,
     offer_fallback: dict[str, str],
     quiz: dict[str, Any],
+    natal: Optional[dict[str, Any]] = None,
     source: str = "llm",
+    require_llm_fields: bool = False,
 ) -> dict[str, Any]:
     out = copy.deepcopy(base_insight)
     influences_before = out.get("influences") or []
+    missing: list[str] = []
 
     for section in ("influences", "cycles"):
         original = out.get(section) or []
@@ -422,6 +526,11 @@ def _merge_llm_result(
 
     influences = out.get("influences") or influences_before
 
+    # User-facing funnel texts: only from LLM when require_llm_fields.
+    if require_llm_fields:
+        for key in ("opening", "body", "product_pitch", "outcomes", "offer"):
+            out.pop(key, None)
+
     opening_raw = rewritten.get("opening")
     if isinstance(opening_raw, dict):
         bridge = _normalize_opening_bridge(str(opening_raw.get("bridge") or ""))
@@ -430,61 +539,92 @@ def _merge_llm_result(
             clause = clause[0].lower() + clause[1:] if len(clause) > 1 else clause.lower()
             out["opening"] = {"bridge": bridge, "insight": clause[:120]}
     if not out.get("opening"):
-        out["opening"] = default_opening(quiz, influences)
+        if require_llm_fields:
+            missing.append("opening")
+        else:
+            out["opening"] = default_opening(quiz, influences)
 
     body = str(rewritten.get("body") or "").strip()
     if len(body) >= 60:
         out["body"] = body[:900]
+    elif require_llm_fields:
+        missing.append("body")
     else:
         out["body"] = default_body(quiz, influences)
 
     cycles = out.get("cycles") or []
-    pitches = rewritten.get("cycle_pitches")
-    if isinstance(pitches, list) and len(pitches) >= 2:
-        merged_pitches: list[dict[str, str]] = []
-        for idx, item in enumerate(pitches[:2]):
-            if not isinstance(item, dict):
-                continue
-            cycle_key = str(item.get("cycle_key") or (cycles[idx].get("key") if idx < len(cycles) else f"cycle_{idx}"))
-            title = str(item.get("title") or "").strip()
-            text = str(item.get("text") or "").strip()
-            if title and text:
-                merged_pitches.append({"cycle_key": cycle_key, "title": title[:120], "text": text[:500]})
-        if len(merged_pitches) >= 2:
-            out["cycle_pitches"] = merged_pitches
-    if not out.get("cycle_pitches"):
-        out["cycle_pitches"] = default_cycle_pitches(cycles, quiz)
+
+    pitch_raw = rewritten.get("product_pitch")
+    if isinstance(pitch_raw, dict):
+        p_title = str(pitch_raw.get("title") or "").strip()
+        p_text = str(pitch_raw.get("text") or "").strip()
+        if p_title and p_text:
+            out["product_pitch"] = {"title": p_title[:120], "text": p_text[:500]}
+    if not out.get("product_pitch"):
+        if require_llm_fields:
+            missing.append("product_pitch")
+        else:
+            out["product_pitch"] = default_product_pitch(cycles, quiz, natal)
 
     outcomes = rewritten.get("outcomes")
     if isinstance(outcomes, dict):
         o_title = str(outcomes.get("title") or "").strip()
-        items = outcomes.get("items")
-        if o_title and isinstance(items, list):
-            clean_items = [str(i).strip() for i in items if str(i).strip()][:6]
-            if clean_items:
-                out["outcomes"] = {"title": o_title[:120], "items": clean_items}
+        cards = outcomes.get("cards")
+        if o_title and isinstance(cards, list):
+            merged_cards: list[dict[str, str]] = []
+            for idx, card in enumerate(cards[:4]):
+                if not isinstance(card, dict):
+                    continue
+                key = str(card.get("key") or f"metric_{idx}")
+                label = str(card.get("label") or "").strip()
+                before = str(card.get("before") or "").strip()
+                after = str(card.get("after") or "").strip()
+                hint = str(card.get("hint") or "").strip()
+                if label and before and after:
+                    merged_cards.append(
+                        {
+                            "key": key[:40],
+                            "label": label[:40],
+                            "before": before[:12],
+                            "after": after[:12],
+                            "hint": hint[:80],
+                        }
+                    )
+            if len(merged_cards) >= 4:
+                out["outcomes"] = {"title": o_title[:120], "cards": merged_cards}
     if not out.get("outcomes"):
-        out["outcomes"] = default_outcomes(quiz)
+        if require_llm_fields:
+            missing.append("outcomes")
+        else:
+            out["outcomes"] = default_outcomes(quiz)
 
     offer = rewritten.get("offer")
     if isinstance(offer, dict):
-        title = str(offer.get("title") or offer_fallback.get("title") or "").strip()
         text = str(offer.get("text") or "").strip()
-        cta = str(offer.get("cta") or "").strip()
         price = str(offer.get("price") or offer_fallback.get("price") or "777 ₽/мес").strip()
-        if title and text:
+        fixed_title = "Стань ближе к своему истинному я через подробный разбор"
+        fixed_cta = "Получить за 777"
+        if text:
             out["offer"] = {
-                "title": title[:120],
+                "title": fixed_title,
                 "text": text[:500],
-                "cta": (cta or offer_fallback.get("cta") or "Оформить подписку")[:60],
+                "cta": fixed_cta,
                 "price": price[:40],
             }
+        elif require_llm_fields:
+            missing.append("offer")
         else:
             out["offer"] = offer_fallback
+    elif require_llm_fields:
+        missing.append("offer")
     else:
         out["offer"] = offer_fallback
 
+    if missing:
+        raise ValueError(f"LLM response missing required fields: {', '.join(missing)}")
+
     out["tone"] = "pattern_psych_llm"
+    out["funnel_version"] = 2
     out["source"] = source
     if not out.get("disclaimer"):
         out["disclaimer"] = base_insight.get("disclaimer") or (

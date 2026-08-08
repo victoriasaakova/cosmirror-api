@@ -176,17 +176,14 @@ class OnboardingStepSubmitSerializer(serializers.Serializer):
                 )
         elif step.step_type == OnboardingStep.StepType.WAITLIST:
             email = (payload.get("email") or "").strip()
-            phone = (payload.get("phone") or "").strip()
             telegram = (payload.get("telegram") or "").strip()
-            if not (email or phone or telegram):
+            if not telegram:
                 raise serializers.ValidationError(
-                    {
-                        "payload": {
-                            "telegram": [
-                                "Оставь Telegram или телефон — так мы сможем открыть тебе разбор."
-                            ]
-                        }
-                    }
+                    {"payload": {"telegram": ["Укажи Telegram — так мы сможем открыть тебе разбор."]}}
+                )
+            if not email:
+                raise serializers.ValidationError(
+                    {"payload": {"email": ["Укажи email — так мы сможем открыть тебе разбор."]}}
                 )
 
         answer, _ = OnboardingStepAnswer.objects.update_or_create(
