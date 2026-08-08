@@ -119,6 +119,11 @@ REST_FRAMEWORK = {
     ],
 }
 
-# Groq LLM — персонализация инсайта / оффера (опционально)
+# LLM — персонализация инсайта / оффера (опционально)
+# Polza.ai (рекомендуется для RU/прод): https://polza.ai/docs
+LLM_PROVIDER = (os.getenv("LLM_PROVIDER") or "auto").strip().lower()
+POLZA_API_KEY = (os.getenv("POLZA_API_KEY") or "").strip()
+POLZA_BASE_URL = (os.getenv("POLZA_BASE_URL") or "https://polza.ai/api/v1").strip()
+POLZA_MODEL = (os.getenv("POLZA_MODEL") or "openai/gpt-5.6-terra-pro").strip()
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
-GROQ_MODEL = (os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile").strip()
+GROQ_MODEL = (os.getenv("GROQ_MODEL") or "qwen/qwen3.6-27b").strip()

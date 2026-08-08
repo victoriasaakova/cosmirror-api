@@ -22,6 +22,23 @@ def is_configured() -> bool:
     return bool(getattr(settings, "GROQ_API_KEY", "") or "")
 
 
+def _model_create_kwargs(model_name: str, *, temperature: float, max_tokens: int) -> dict[str, Any]:
+    """Model-specific Groq API params per https://console.groq.com/docs/reasoning"""
+    kwargs: dict[str, Any] = {
+        "model": model_name,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"},
+    }
+    if model_name.startswith("qwen/"):
+        # JSON mode: parsed reasoning + no extra thinking tokens (see Groq reasoning docs)
+        kwargs["reasoning_format"] = "parsed"
+        kwargs["reasoning_effort"] = "none"
+    elif "gpt-oss" in model_name or model_name.startswith("openai/"):
+        kwargs["reasoning_effort"] = "low"
+    return kwargs
+
+
 def chat_json(
     *,
     system: str,
@@ -38,7 +55,7 @@ def chat_json(
     if not api_key:
         raise GroqError("GROQ_API_KEY is not configured")
 
-    model_name = (model or getattr(settings, "GROQ_MODEL", "") or "llama-3.3-70b-versatile").strip()
+    model_name = (model or getattr(settings, "GROQ_MODEL", "") or "qwen/qwen3.6-27b").strip()
 
     try:
         from groq import Groq
@@ -46,17 +63,21 @@ def chat_json(
         raise GroqError("groq package is not installed") from exc
 
     try:
-        client = Groq(api_key=api_key, timeout=45.0)
-        completion = client.chat.completions.create(
-            model=model_name,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            response_format={"type": "json_object"},
-            messages=[
+        client = Groq(api_key=api_key, timeout=90.0)
+        create_kwargs: dict[str, Any] = {
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-        )
+            **_model_create_kwargs(model_name, temperature=temperature, max_tokens=max_tokens),
+        }
+        try:
+            completion = client.chat.completions.create(**create_kwargs)
+        except TypeError:
+            # Older SDK: drop optional reasoning fields
+            for key in ("reasoning_format", "reasoning_effort"):
+                create_kwargs.pop(key, None)
+            completion = client.chat.completions.create(**create_kwargs)
     except Exception as exc:
         logger.warning("Groq API request failed: %s", type(exc).__name__)
         raise GroqError(f"Groq request failed: {type(exc).__name__}") from exc

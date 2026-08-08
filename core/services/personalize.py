@@ -1,5 +1,5 @@
 """
-Персонализация инсайта через Groq: перепись шаблонных текстов + оффер.
+Персонализация инсайта через LLM (Polza.ai / Groq): перепись шаблонов + оффер.
 
 Без ключа / при ошибке — шаблоны + дефолтный оффер из фокуса квиза.
 """
@@ -11,7 +11,7 @@ import json
 import logging
 from typing import Any, Optional
 
-from core.services import groq_client
+from core.services import llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -45,39 +45,49 @@ LIFE_STAGE_LABELS = {
 SYSTEM_PROMPT = """\
 Ты редактор психологических текстов для продукта Cosmirror (астро-психология без эзотерического пафоса).
 
-Задача: на основе шаблонных блоков и профиля пользователя переписать тексты так,
-чтобы они звучали лично и по делу, и собрать короткий персональный оффер.
+Задача: подготовить тексты онбординг-воронки после квиза:
+1) переписать influences и cycles (кратко, лично);
+2) два продающих экрана по двум фоновым циклам — как сервис поможет прожить этот фон;
+3) экран «что отмечают пользователи» через неделю;
+4) финальный оффер подписки.
 
 Правила:
 - Язык: русский.
-- Тон: спокойный, взрослый, как у хорошего психолога; без «ты избранная», без прогнозов будущего, без гарантий, без медицинских/терапевтических диагнозов.
-- Не используй астро-жаргон вроде «транзит Сатурна квадратит» — можно мягко упоминать Солнце/Луну/Асцендент и «длинные циклы» только если это уже есть в шаблоне.
-- Обращение на «ты». Если есть имя — можно один раз использовать.
-- Сохрани смысл каждого блока, но привяжи к фокусу / intent / жизненному этапу пользователя.
-- Длина text каждого блока: 1–3 предложения, до ~280 символов.
-- title можно слегка уточнить, но key каждого блока НЕ МЕНЯЙ.
-- Не добавляй новые блоки в base / influences / cycles — только перепиши существующие.
-- offer: персональное предложение продолжить разбор (ранний доступ), завязанное на фокус и intent.
-  title до 60 символов, text 1–2 предложения, cta — короткая кнопка (до 40 символов).
+- Тон: спокойный, взрослый; без прогнозов, гарантий и медицинских диагнозов.
+- Без астро-жаргона; можно «длинные циклы», Солнце/Луна/Асцендент.
+- Обращение на «ты». Имя — уместно один раз.
+- Привяжи к фокусу, intent и жизненному этапу.
+- influences/cycles: key НЕ МЕНЯЙ; text до ~280 символов.
+- cycle_pitches: РОВНО 2 элемента по первым двум cycles (если один — второй с другим углом).
+  title до 70 символов; text 2–3 предложения: фон + как Cosmirror поможет.
+- outcomes: title до 80 символов; items — 4 фразы про результат через ~неделю.
+- offer: title ТОЧНО «Стань ближе к своему истинному я»; text 1–2 предложения; cta до 40 символов; price ТОЧНО «777 ₽/мес».
 
-Верни ТОЛЬКО JSON-объект такой формы:
+Верни ТОЛЬКО JSON:
 {
-  "base": [{"key": "...", "title": "...", "text": "..."}],
   "influences": [{"key": "...", "title": "...", "text": "..."}],
   "cycles": [{"key": "...", "title": "...", "text": "..."}],
-  "offer": {"title": "...", "text": "...", "cta": "..."}
+  "cycle_pitches": [
+    {"cycle_key": "...", "title": "...", "text": "..."},
+    {"cycle_key": "...", "title": "...", "text": "..."}
+  ],
+  "outcomes": {"title": "...", "items": ["...", "..."]},
+  "offer": {"title": "Стань ближе к своему истинному я", "text": "...", "cta": "...", "price": "777 ₽/мес"}
 }
 """
 
 
 def is_personalized(insight: Optional[dict[str, Any]]) -> bool:
-    """Уже есть оффер — не дергаем LLM / не пересобираем fallback."""
+    """Уже есть воронка онбординга — не дергаем LLM повторно."""
     if not isinstance(insight, dict):
         return False
     offer = insight.get("offer")
     if not isinstance(offer, dict):
         return False
-    return bool(str(offer.get("title") or "").strip() and str(offer.get("text") or "").strip())
+    if not (str(offer.get("title") or "").strip() and str(offer.get("text") or "").strip()):
+        return False
+    pitches = insight.get("cycle_pitches")
+    return isinstance(pitches, list) and len(pitches) >= 2
 
 
 def personalize_insight(
@@ -89,7 +99,7 @@ def personalize_insight(
     """
     Вернуть инсайт с offer.
     Если уже personalized — вернуть как есть.
-    Если Groq недоступен — шаблоны + default offer.
+    Если LLM недоступен — шаблоны + default offer.
     """
     if is_personalized(insight):
         return insight
@@ -98,16 +108,17 @@ def personalize_insight(
     base_insight = copy.deepcopy(insight) if insight else {}
     offer = default_offer(quiz)
 
-    if not groq_client.is_configured():
-        return _with_templates(base_insight, offer)
+    if not llm_client.is_configured():
+        return _with_templates(base_insight, offer, quiz)
 
     try:
-        rewritten = _call_groq(base_insight, natal, quiz)
+        rewritten = _call_llm(base_insight, natal, quiz)
     except Exception:
         logger.warning("Insight personalization failed; using templates", exc_info=False)
-        return _with_templates(base_insight, offer)
+        return _with_templates(base_insight, offer, quiz)
 
-    return _merge_llm_result(base_insight, rewritten, offer_fallback=offer)
+    provider = llm_client.active_provider() or "llm"
+    return _merge_llm_result(base_insight, rewritten, offer_fallback=offer, quiz=quiz, source=provider)
 
 
 def default_offer(quiz: dict[str, Any]) -> dict[str, str]:
@@ -117,30 +128,83 @@ def default_offer(quiz: dict[str, Any]) -> dict[str, str]:
     focus_keys = [str(f) for f in focus if f]
     primary = focus_keys[0] if focus_keys else "path"
     focus_label = FOCUS_LABELS.get(primary, FOCUS_LABELS["path"])
-    intent = str(quiz.get("intent") or "")
-    intent_label = INTENT_LABELS.get(intent, INTENT_LABELS["other"])
+    intent_label = INTENT_LABELS.get(str(quiz.get("intent") or ""), INTENT_LABELS["other"])
     name = (quiz.get("name") or "").strip()
-
-    title = f"{name}, разбор под твой фокус" if name else "Разбор под твой фокус"
+    who = f"{name}, " if name else ""
     return {
-        "title": title,
+        "title": "Стань ближе к своему истинному я",
         "text": (
-            f"Соберу персональный портрет вокруг темы «{focus_label}» — "
-            f"чтобы помочь {intent_label}, без общих гороскопов."
+            f"{who}персональный разбор поможет увидеть, как фон циклов пересекается с темой «{focus_label}» — "
+            f"чтобы {intent_label} без общих гороскопов."
         ),
-        "cta": "Получить полный разбор",
+        "cta": "Оформить подписку",
+        "price": "777 ₽/мес",
     }
 
 
-def _with_templates(insight: dict[str, Any], offer: dict[str, str]) -> dict[str, Any]:
+def default_outcomes(quiz: dict[str, Any]) -> dict[str, Any]:
+    name = (quiz.get("name") or "").strip()
+    title = f"{name}, что меняется уже через неделю" if name else "Что меняется уже через неделю"
+    return {
+        "title": title,
+        "items": [
+            "Понимаешь, что даёт энергию, а что её забирает",
+            "Видишь свои сильные стороны и как их масштабировать",
+            "Замечаешь повторяющиеся сценарии до того, как они снова уведут в круг",
+            "Легче выбирать решения, которые ближе к твоему ритму",
+        ],
+    }
+
+
+def default_cycle_pitches(cycles: list[dict[str, Any]], quiz: dict[str, Any]) -> list[dict[str, str]]:
+    focus = quiz.get("focus") or []
+    if isinstance(focus, str):
+        focus = [focus]
+    focus_keys = [str(f) for f in focus if f]
+    focus_label = FOCUS_LABELS.get(focus_keys[0], "жизни") if focus_keys else "жизни"
+
+    def pitch_for(cycle: dict[str, Any], idx: int) -> dict[str, str]:
+        key = str(cycle.get("key") or f"cycle_{idx}")
+        cycle_title = str(cycle.get("title") or "Фон цикла")
+        cycle_text = str(cycle.get("text") or "")
+        return {
+            "cycle_key": key,
+            "title": f"Как пройти «{cycle_title}» с опорой",
+            "text": (
+                f"Сейчас в фоне: {cycle_text} "
+                f"Cosmirror поможет связать это с твоей картой и фокусом «{focus_label}» — "
+                "чтобы не тонуть в ощущениях, а видеть, где тебе нужна опора и где — шаг."
+            )[:480],
+        }
+
+    if not cycles:
+        generic = {
+            "cycle_key": "cycle_generic",
+            "title": "Как Cosmirror поможет в этом периоде",
+            "text": (
+                "Мы соберём персональный разбор: что сейчас в фоне, "
+                "как это пересекается с твоей картой и куда направить внимание на этой неделе."
+            ),
+        }
+        return [generic, {**generic, "title": "Твой ритм и опора в переменах"}]
+
+    first = pitch_for(cycles[0], 0)
+    second = pitch_for(cycles[1] if len(cycles) > 1 else cycles[0], 1)
+    return [first, second]
+
+
+def _with_templates(insight: dict[str, Any], offer: dict[str, str], quiz: dict[str, Any]) -> dict[str, Any]:
     out = copy.deepcopy(insight) if insight else {}
     out.setdefault("tone", "pattern_psych")
+    cycles = out.get("cycles") or []
+    out["cycle_pitches"] = default_cycle_pitches(cycles, quiz)
+    out["outcomes"] = default_outcomes(quiz)
     out["offer"] = offer
     out["source"] = "templates"
     return out
 
 
-def _call_groq(
+def _call_llm(
     insight: dict[str, Any],
     natal: dict[str, Any],
     quiz: dict[str, Any],
@@ -161,7 +225,7 @@ def _call_groq(
         "Перепиши блоки и собери оффер по этим данным.\n\n"
         + json.dumps(payload, ensure_ascii=False)
     )
-    return groq_client.chat_json(system=SYSTEM_PROMPT, user=user)
+    return llm_client.chat_json(system=SYSTEM_PROMPT, user=user)
 
 
 def _merge_llm_result(
@@ -169,25 +233,57 @@ def _merge_llm_result(
     rewritten: dict[str, Any],
     *,
     offer_fallback: dict[str, str],
+    quiz: dict[str, Any],
+    source: str = "llm",
 ) -> dict[str, Any]:
     out = copy.deepcopy(base_insight)
-    for section in ("base", "influences", "cycles"):
+    for section in ("influences", "cycles"):
         original = out.get(section) or []
         llm_items = rewritten.get(section)
         if not isinstance(llm_items, list):
             continue
         out[section] = _merge_section(original, llm_items)
 
+    cycles = out.get("cycles") or []
+    pitches = rewritten.get("cycle_pitches")
+    if isinstance(pitches, list) and len(pitches) >= 2:
+        merged_pitches: list[dict[str, str]] = []
+        for idx, item in enumerate(pitches[:2]):
+            if not isinstance(item, dict):
+                continue
+            cycle_key = str(item.get("cycle_key") or (cycles[idx].get("key") if idx < len(cycles) else f"cycle_{idx}"))
+            title = str(item.get("title") or "").strip()
+            text = str(item.get("text") or "").strip()
+            if title and text:
+                merged_pitches.append({"cycle_key": cycle_key, "title": title[:120], "text": text[:500]})
+        if len(merged_pitches) >= 2:
+            out["cycle_pitches"] = merged_pitches
+    if not out.get("cycle_pitches"):
+        out["cycle_pitches"] = default_cycle_pitches(cycles, quiz)
+
+    outcomes = rewritten.get("outcomes")
+    if isinstance(outcomes, dict):
+        o_title = str(outcomes.get("title") or "").strip()
+        items = outcomes.get("items")
+        if o_title and isinstance(items, list):
+            clean_items = [str(i).strip() for i in items if str(i).strip()][:6]
+            if clean_items:
+                out["outcomes"] = {"title": o_title[:120], "items": clean_items}
+    if not out.get("outcomes"):
+        out["outcomes"] = default_outcomes(quiz)
+
     offer = rewritten.get("offer")
     if isinstance(offer, dict):
-        title = str(offer.get("title") or "").strip()
+        title = str(offer.get("title") or offer_fallback.get("title") or "").strip()
         text = str(offer.get("text") or "").strip()
         cta = str(offer.get("cta") or "").strip()
+        price = str(offer.get("price") or offer_fallback.get("price") or "777 ₽/мес").strip()
         if title and text:
             out["offer"] = {
                 "title": title[:120],
                 "text": text[:500],
-                "cta": (cta or offer_fallback.get("cta") or "Получить полный разбор")[:60],
+                "cta": (cta or offer_fallback.get("cta") or "Оформить подписку")[:60],
+                "price": price[:40],
             }
         else:
             out["offer"] = offer_fallback
@@ -195,7 +291,7 @@ def _merge_llm_result(
         out["offer"] = offer_fallback
 
     out["tone"] = "pattern_psych_llm"
-    out["source"] = "groq"
+    out["source"] = source
     if not out.get("disclaimer"):
         out["disclaimer"] = base_insight.get("disclaimer") or (
             "Это не прогноз будущего и не замена терапии. "

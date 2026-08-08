@@ -54,7 +54,8 @@ Payload шага `birth`:
 - `birth_place` обязателен (или lat/lng).
 - Без `birth_time` — Солнце/Луна/планеты считаются, Asc/дома не отдаём.
 - Инсайт: готовые тексты в духе The Pattern, не LLM.
-  С `GROQ_API_KEY` тексты + оффер персонализируются через Groq и кэшируются в `NatalChart.chart_data`.
+  С `POLZA_API_KEY` (модель `openai/gpt-5.6-terra-pro` через [Polza.ai](https://polza.ai/docs))
+  или `GROQ_API_KEY` тексты + оффер персонализируются и кэшируются в `NatalChart.chart_data`.
   Без ключа — шаблоны + дефолтный оффер из фокуса квиза.
 ## Domain
 
