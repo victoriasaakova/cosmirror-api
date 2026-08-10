@@ -12,7 +12,7 @@ from typing import Optional
 from timezonefinder import TimezoneFinder
 
 _TF = TimezoneFinder()
-_USER_AGENT = "CosmirrorOnboarding/0.1 (local; contact=hello@cosmirror.app)"
+_USER_AGENT = "CosmirrorOnboarding/0.1 (local; contact=hello@cosmirror.ru)"
 
 
 @dataclass
