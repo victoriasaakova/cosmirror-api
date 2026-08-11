@@ -236,8 +236,8 @@ def personalize_insight(
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
         future = pool.submit(_llm_path)
-        # Онбординг не должен висеть на LLM: >4с → шаблоны.
-        return future.result(timeout=4)
+        # Polza + editorial обычно 15–60с; gunicorn timeout=120.
+        return future.result(timeout=90)
     except concurrent.futures.TimeoutError:
         logger.warning("Insight personalization timed out; using templates")
         return templates
