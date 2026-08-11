@@ -42,42 +42,44 @@ LIFE_STAGE_LABELS = {
     "unclear": "пока неясно, что происходит",
 }
 
-# Связки для составного заголовка (после имени, перед рекомендацией).
-# Выбирай одну; она должна грамматически вести к продолжению после «что».
+# Связки для составного заголовка (после имени, перед наблюдением).
+# Ответ на вопрос/намерение пользователя: «Имя, {bridge} {insight}».
 OPENING_BRIDGES = [
-    "сейчас подсвечивается, что",
-    "сейчас видно, что",
-    "сейчас пространство показывает, что",
-    "сейчас тебе подсвечивается, что",
-    "сейчас особенно заметно, что",
-    "сейчас на фоне циклов видно, что",
-    "сейчас карта подсказывает, что",
+    "ты можешь замечать, что",
+    "ты можешь чувствовать, что",
+    "сейчас важно",
 ]
 
 SYSTEM_PROMPT = f"""\
 Ты редактор психологических текстов для продукта Cosmirror (астро-психология без эзотерического пафоса).
 
-Задача: подготовить тексты онбординг-воронки после квиза:
+Задача: подготовить тексты онбординг-воронки после квиза (3 экрана + данные):
 1) первый экран разбора: opening + body — короткий психологический ПОРТРЕТ (один экран);
 2) переписать influences и cycles (кратко, лично, про поведение, не про знаки);
-3) продающий экран product_pitch: сначала ЧТО делает продукт, затем как помогает ЭТОМУ человеку;
-4) экран outcomes с карточками динамики через неделю;
-5) финальный оффер.
+3) экран product_pitch: ЧТО ФАКТИЧЕСКИ будет в подробном отчёте (пока продукта нет —
+   продаём информацию/разбор, который человек сможет использовать и на который опираться);
+4) offer + outcomes.cards: продающий оффер. outcomes.cards — 4 пункта СОДЕРЖИМОГО отчёта
+   (не «изменения за неделю»).
 
 Правила:
 - Язык: русский.
 - Тон: спокойный, взрослый; без прогнозов, гарантий и медицинских диагнозов.
 - Обращение на «ты». Имя в opening/body НЕ пиши — его покажут отдельно.
 - Натальные данные (Солнце/Луна/Асцендент) — только внутренний контекст для тебя.
-  ЗАПРЕЩЕНО в body, product_pitch, opening.insight, outcomes: конструкции
+  ЗАПРЕЩЕНО в body, product_pitch, opening.insight, outcomes, offer.text: конструкции
   «Солнце в …», «Луна в …», «Асцендент в …», перечисления знаков и «карта говорит».
   Пиши про наблюдаемые паттерны поведения, энергии, выбора и отношений.
+- НЕ пиши про «наблюдения через неделю», «метрики за неделю», подписку-сервис как продукт.
+  Мы продаём подробный персональный разбор-отчёт (информацию для опоры).
 
 Первый экран (opening + body) — короткий портрет на ОДИН экран телефона:
 - opening.bridge: выбери РОВНО одну фразу из списка (дословно):
 {json.dumps(OPENING_BRIDGES, ensure_ascii=False)}
-- opening.insight: продолжение после «что» — главная мягкая рекомендация/наблюдение.
-  Бери смысл из title первого influence (переформулируй как клаузу, без заглавной буквы).
+- opening.insight: прямой ответ на вопрос/намерение пользователя (intent из квиза) —
+  мягкое наблюдение или фокус внимания. Бери смысл из title первого influence
+  (переформулируй как клаузу, без заглавной буквы).
+  Если bridge заканчивается на «что» — клауза после «что».
+  Если bridge «сейчас важно» — клауза сразу после (без «что»).
   Пример: title «Тяга выйти из тесной роли» → insight «пора выйти из тесной роли».
   До 80 символов. Читается как: «Имя, {{bridge}} {{insight}}».
 - body: РОВНО 2–3 коротких предложения, до ~280 символов.
@@ -88,40 +90,50 @@ SYSTEM_PROMPT = f"""\
 Остальное:
 - influences/cycles: key НЕ МЕНЯЙ; title до 60 символов; text до ~200 символов.
   Title/text — про паттерн и опыт, не «Солнце в X».
-- product_pitch: ЭТО ПРОДАЖА ПРОДУКТА, не второй инсайт и не продолжение разбора.
-  title (до 70): что ДЕЛАЕТ Cosmirror (функция продукта). Примеры тона:
-  «Связываем карту, циклы и твои реакции», «Показываем повторяющиеся сценарии раньше».
-  Не пиши в title диагноз/портрет человека («Когда привычная роль уже тесна…»).
-  text (1–2 предложения, до ~220 символов): как это помогает ИМЕННО этому человеку —
-  через его фокус/паттерн из квиза. Без Солнца/Луны/Асцендента.
-- outcomes: title до 80 символов; cards — РОВНО 4 карточки метрик.
-  Каждая card: key (латиница), label (1–2 слова), before/after («32%»), hint до 60 символов.
-  after всегда выше before.
+- product_pitch: ЧТО В ОТЧЁТЕ (не второй инсайт).
+  title ТОЧНО: «Что ты получишь в подробном разборе»
+  (фраза «подробном разборе» будет выделена курсивом на фронте).
+  text — РОВНО 2 короткие строки через \\n, суммарно до ~160 символов.
+  Тон: что человек получает (разбор реакций/сценариев) + ясность в выборе/отношениях.
+  ЗАПРЕЩЕНО: NASA, JPL, эфемериды, длинные методологические абзацы, «через неделю».
+  Пример:
+  «Персональный разбор реакций, потребностей и повторяющихся сценариев.\\nБольше ясности в выборе, отношениях и ежедневном ритме.»
+- outcomes: title «В полном разборе».
+  cards — РОВНО 4 пункта ФАКТИЧЕСКОГО содержимого (что посчитаем и отдадим),
+  НЕ мягкие выгоды вроде «ясность / опора / выбор».
+  key ТОЧНО по списку: natal, cycles, crossings, focus.
+  label/hint можно чуть подстроить под фокус, но смысл блоков не меняй:
+  1) natal — полный расчёт натальной карты: как устроены планеты и как влияют;
+  2) cycles — текущие и ближайшие периоды;
+  3) crossings — пересечения циклов с картой пользователя;
+  4) focus — разбор сильных сторон и паттернов под запрос квиза.
+  before/after — служебные проценты; after > before.
 - offer: title ТОЧНО «Стань ближе к своему истинному я через подробный разбор»;
-  text — 2 строки через \\n; cta ТОЧНО «Получить за 777»; price ТОЧНО «777 ₽/мес».
+  text — пустая строка или 1 короткая (до 80 символов); детали на фронте списком блоков.
+  cta ТОЧНО «Получить за 777»; price ТОЧНО «777 ₽».
 
 Верни ТОЛЬКО JSON:
 {{
-  "opening": {{"bridge": "сейчас пространство показывает, что", "insight": "пора выйти из тесной роли"}},
+  "opening": {{"bridge": "ты можешь замечать, что", "insight": "пора выйти из тесной роли"}},
   "body": "Два-три коротких предложения портрета.",
   "influences": [{{"key": "...", "title": "...", "text": "..."}}],
   "cycles": [{{"key": "...", "title": "...", "text": "..."}}],
   "product_pitch": {{
-    "title": "Связываем карту, циклы и твои реакции",
-    "text": "В теме работы и выбора увидишь, где привычный порядок держит тебя дольше, чем нужно — и где появляется пространство для другого шага."
+    "title": "Что ты получишь в подробном разборе",
+    "text": "Персональный разбор реакций, потребностей и повторяющихся сценариев.\\nБольше ясности в выборе, отношениях и ежедневном ритме."
   }},
   "outcomes": {{
-    "title": "...",
+    "title": "В полном разборе",
     "cards": [
-      {{"key": "clarity", "label": "Ясность", "before": "32%", "after": "81%", "hint": "видишь, что даёт энергию"}},
-      {{"key": "patterns", "label": "Паттерны", "before": "24%", "after": "76%", "hint": "замечаешь повторения раньше"}}
+      {{"key": "natal", "label": "Полный расчёт натальной карты", "before": "32%", "after": "81%", "hint": "как устроены твои планеты и как они влияют на реакции и выбор"}},
+      {{"key": "cycles", "label": "Текущие и ближайшие периоды", "before": "24%", "after": "76%", "hint": "что происходит сейчас и что подсвечивается в ближайшем периоде"}}
     ]
   }},
   "offer": {{
     "title": "Стань ближе к своему истинному я через подробный разбор",
-    "text": "Персональный разбор под твои паттерны.\\nОтслеживание энергии и повторяющихся сценариев.",
+    "text": "",
     "cta": "Получить за 777",
-    "price": "777 ₽/мес"
+    "price": "777 ₽"
   }}
 }}
 """
@@ -134,7 +146,7 @@ def _has_funnel_structure(insight: Optional[dict[str, Any]]) -> bool:
     offer = insight.get("offer")
     if not isinstance(offer, dict):
         return False
-    if not (str(offer.get("title") or "").strip() and str(offer.get("text") or "").strip()):
+    if not str(offer.get("title") or "").strip():
         return False
     pitch = insight.get("product_pitch")
     if not isinstance(pitch, dict):
@@ -185,7 +197,7 @@ def personalize_insight(
     """
     Вернуть инсайт с offer.
     Если уже personalized — вернуть как есть.
-    Если LLM недоступен — шаблоны + default offer.
+    Если LLM недоступен / медленный — шаблоны + default offer.
     LLM-тексты дополнительно проходят через editorial.py (Editorial Writing System).
     """
     if is_personalized(insight):
@@ -194,6 +206,7 @@ def personalize_insight(
     quiz = quiz or {}
     base_insight = copy.deepcopy(insight) if insight else {}
     offer = default_offer(quiz)
+    templates = _with_templates(base_insight, offer, quiz, natal)
 
     # Черновик уже есть (например после генерации без editorial) — только редактура.
     if _has_funnel_structure(base_insight) and not base_insight.get("editorial_passed"):
@@ -202,9 +215,11 @@ def personalize_insight(
             return _apply_editorial(base_insight, natal=natal, quiz=quiz)
 
     if not llm_client.is_configured():
-        return _with_templates(base_insight, offer, quiz, natal)
+        return templates
 
-    try:
+    import concurrent.futures
+
+    def _llm_path() -> dict[str, Any]:
         rewritten = _call_llm(base_insight, natal, quiz)
         provider = llm_client.active_provider() or "llm"
         merged = _merge_llm_result(
@@ -216,25 +231,22 @@ def personalize_insight(
             source=provider,
             require_llm_fields=True,
         )
-    except Exception:
-        logger.warning("Insight personalization failed; retrying once", exc_info=False)
-        try:
-            rewritten = _call_llm(base_insight, natal, quiz)
-            provider = llm_client.active_provider() or "llm"
-            merged = _merge_llm_result(
-                base_insight,
-                rewritten,
-                offer_fallback=offer,
-                quiz=quiz,
-                natal=natal,
-                source=provider,
-                require_llm_fields=True,
-            )
-        except Exception:
-            logger.warning("Insight personalization failed; using templates", exc_info=False)
-            return _with_templates(base_insight, offer, quiz, natal)
+        return _apply_editorial(merged, natal=natal, quiz=quiz)
 
-    return _apply_editorial(merged, natal=natal, quiz=quiz)
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        future = pool.submit(_llm_path)
+        # Онбординг не должен висеть на LLM: >4с → шаблоны.
+        return future.result(timeout=4)
+    except concurrent.futures.TimeoutError:
+        logger.warning("Insight personalization timed out; using templates")
+        return templates
+    except Exception:
+        logger.warning("Insight personalization failed; using templates", exc_info=False)
+        return templates
+    finally:
+        # Не ждём зависший LLM-поток — иначе timeout бесполезен.
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def _apply_editorial(
@@ -266,22 +278,11 @@ def _apply_editorial(
 
 
 def default_offer(quiz: dict[str, Any]) -> dict[str, str]:
-    focus = quiz.get("focus") or []
-    if isinstance(focus, str):
-        focus = [focus]
-    focus_keys = [str(f) for f in focus if f]
-    primary = focus_keys[0] if focus_keys else "path"
-    focus_label = FOCUS_LABELS.get(primary, FOCUS_LABELS["path"])
-    intent_label = INTENT_LABELS.get(str(quiz.get("intent") or ""), INTENT_LABELS["other"])
-    name = (quiz.get("name") or "").strip()
     return {
         "title": "Стань ближе к своему истинному я через подробный разбор",
-        "text": (
-            f"Персональный разбор под твою карту и тему «{focus_label}».\n"
-            f"Отслеживание энергии, паттернов и циклов — чтобы {intent_label}."
-        ),
+        "text": "",
         "cta": "Получить за 777",
-        "price": "777 ₽/мес",
+        "price": "777 ₽",
     }
 
 
@@ -351,38 +352,42 @@ def default_body(quiz: dict[str, Any], influences: list[dict[str, Any]]) -> str:
 
 
 def default_outcomes(quiz: dict[str, Any]) -> dict[str, Any]:
-    name = (quiz.get("name") or "").strip()
-    title = f"{name}, что меняется уже через неделю" if name else "Что меняется уже через неделю"
+    """Факт. блоки полного разбора: то, что умеем посчитать и отдать."""
+    focus = quiz.get("focus") or []
+    if isinstance(focus, str):
+        focus = [focus]
+    focus_keys = [str(f) for f in focus if f]
+    focus_label = FOCUS_LABELS.get(focus_keys[0], "жизни") if focus_keys else "жизни"
     return {
-        "title": title,
+        "title": "В полном разборе",
         "cards": [
             {
-                "key": "clarity",
-                "label": "Ясность",
+                "key": "natal",
+                "label": "Полный расчёт натальной карты",
                 "before": "32%",
                 "after": "81%",
-                "hint": "видишь, что даёт энергию",
+                "hint": "как устроены твои планеты и как они влияют на реакции, выбор и отношения с собой",
             },
             {
-                "key": "patterns",
-                "label": "Паттерны",
+                "key": "cycles",
+                "label": "Текущие и ближайшие периоды",
                 "before": "24%",
                 "after": "76%",
-                "hint": "замечаешь повторения раньше",
+                "hint": "что происходит сейчас и что подсвечивается в ближайшем периоде",
             },
             {
-                "key": "strengths",
-                "label": "Сильные стороны",
+                "key": "crossings",
+                "label": "Пересечения циклов с твоей картой",
                 "before": "38%",
                 "after": "84%",
-                "hint": "понимаешь, что масштабировать",
+                "hint": "где текущий фон цепляет твои личные темы прямо сейчас",
             },
             {
-                "key": "rhythm",
-                "label": "Свой ритм",
+                "key": "focus",
+                "label": "Разбор под твой запрос",
                 "before": "29%",
                 "after": "79%",
-                "hint": "легче выбирать решения",
+                "hint": f"сильные стороны и повторяющиеся реакции в теме «{focus_label}»",
             },
         ],
     }
@@ -393,18 +398,12 @@ def default_product_pitch(
     quiz: dict[str, Any],
     natal: Optional[dict[str, Any]] = None,
 ) -> dict[str, str]:
-    focus = quiz.get("focus") or []
-    if isinstance(focus, str):
-        focus = [focus]
-    focus_keys = [str(f) for f in focus if f]
-    focus_label = FOCUS_LABELS.get(focus_keys[0], "жизни") if focus_keys else "жизни"
-    intent_label = INTENT_LABELS.get(str(quiz.get("intent") or ""), INTENT_LABELS["other"])
-    title = "Связываем карту, циклы и твои реакции"
+    title = "Что ты получишь в подробном разборе"
     text = (
-        f"В теме «{focus_label}» покажем повторяющийся сценарий раньше — "
-        f"чтобы {intent_label}, а не снова действовать на автомате."
+        "Персональный разбор реакций, потребностей и повторяющихся сценариев.\n"
+        "Больше ясности в выборе, отношениях и ежедневном ритме."
     )
-    return {"title": title[:90], "text": text[:280]}
+    return {"title": title[:90], "text": text[:220]}
 
 
 def default_cycle_pitches(cycles: list[dict[str, Any]], quiz: dict[str, Any]) -> list[dict[str, str]]:
@@ -459,7 +458,7 @@ def _with_templates(
     out["product_pitch"] = default_product_pitch(cycles, quiz, natal)
     out["outcomes"] = default_outcomes(quiz)
     out["offer"] = offer
-    out["funnel_version"] = 4
+    out["funnel_version"] = 5
     out["source"] = "templates"
     return out
 
@@ -483,8 +482,8 @@ def _call_llm(
     }
     user = (
         "Перепиши блоки и собери оффер по этим данным.\n"
-        "Экран 1: opening + body. Экран 2: product_pitch. Экран 3: outcomes.cards (4 метрики). "
-        "Экран 4: offer.\n\n"
+        "Экран 1: opening + body. Экран 2: product_pitch (что в отчёте). "
+        "Экран 3: offer + outcomes.cards (4 пункта содержимого отчёта).\n\n"
         + json.dumps(payload, ensure_ascii=False)
     )
     return llm_client.chat_json(system=SYSTEM_PROMPT, user=user)
@@ -546,7 +545,8 @@ def _merge_llm_result(
         p_title = str(pitch_raw.get("title") or "").strip()
         p_text = str(pitch_raw.get("text") or "").strip()
         if p_title and p_text:
-            out["product_pitch"] = {"title": p_title[:90], "text": p_text[:280]}
+            # Короткий pitch: не пускаем методологические простыни
+            out["product_pitch"] = {"title": p_title[:90], "text": p_text[:220]}
     if not out.get("product_pitch"):
         if require_llm_fields:
             missing.append("product_pitch")
@@ -588,20 +588,16 @@ def _merge_llm_result(
     offer = rewritten.get("offer")
     if isinstance(offer, dict):
         text = str(offer.get("text") or "").strip()
-        price = str(offer.get("price") or offer_fallback.get("price") or "777 ₽/мес").strip()
+        price = str(offer.get("price") or offer_fallback.get("price") or "777 ₽").strip()
         fixed_title = "Стань ближе к своему истинному я через подробный разбор"
         fixed_cta = "Получить за 777"
-        if text:
-            out["offer"] = {
-                "title": fixed_title,
-                "text": text[:500],
-                "cta": fixed_cta,
-                "price": price[:40],
-            }
-        elif require_llm_fields:
-            missing.append("offer")
-        else:
-            out["offer"] = offer_fallback
+        # text может быть пустым — блоки оффера рисует фронт
+        out["offer"] = {
+            "title": fixed_title,
+            "text": text[:500],
+            "cta": fixed_cta,
+            "price": price[:40],
+        }
     elif require_llm_fields:
         missing.append("offer")
     else:
@@ -611,7 +607,7 @@ def _merge_llm_result(
         raise ValueError(f"LLM response missing required fields: {', '.join(missing)}")
 
     out["tone"] = "pattern_psych_llm"
-    out["funnel_version"] = 4
+    out["funnel_version"] = 5
     out["source"] = source
     if not out.get("disclaimer"):
         out["disclaimer"] = base_insight.get("disclaimer") or (

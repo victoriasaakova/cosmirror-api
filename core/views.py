@@ -33,15 +33,26 @@ from .services.personalize import is_personalized, personalize_insight
 
 
 def _quiz_from_session(session: OnboardingSession) -> dict:
-    """Ответы квиза со шага welcome (без контактов)."""
-    answer = (
-        session.answers.filter(step__slug="welcome")
-        .order_by("-updated_at")
-        .first()
+    """Собрать ответы квиза со всех content-шагов (не waitlist)."""
+    quiz: dict = {}
+    answers = (
+        session.answers.select_related("step")
+        .exclude(step__step_type=OnboardingStep.StepType.WAITLIST)
+        .order_by("step__order", "-updated_at")
     )
-    if not answer or not isinstance(answer.payload, dict):
-        return {}
-    return answer.payload
+    seen_slugs: set[str] = set()
+    for answer in answers:
+        slug = answer.step.slug
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+        if not isinstance(answer.payload, dict):
+            continue
+        for key, value in answer.payload.items():
+            if value in (None, "", [], {}):
+                continue
+            quiz[key] = value
+    return quiz
 
 
 def _ensure_personalized_insight(

@@ -43,16 +43,21 @@ EDIT_TASK = """\
 
 Жёсткие ограничения формы (НЕ ломай структуру продукта):
 - Верни ТОЛЬКО JSON того же shape, что на входе.
-- opening.bridge — НЕ меняй (это фиксированная связка из списка).
-- opening.insight — отредактируй смысл, оставь строчную клаузу после «что», до 90 символов.
+- opening.bridge — НЕ меняй (это фиксированная связка из списка:
+  «ты можешь замечать, что» / «ты можешь чувствовать, что» / «сейчас важно»).
+- opening.insight — отредактируй смысл как ответ на вопрос пользователя; строчная клауза,
+  до 90 символов. После «что» — если bridge с «что»; сразу после «сейчас важно» — без «что».
 - body — 2–3 коротких предложения, до ~280 символов; помещается на один экран; без названий знаков.
 - influences / cycles: key НЕ МЕНЯЙ; title и text можно переписать (про паттерн, не про знак).
-- product_pitch: ПРОДАЖА, не второй инсайт.
-  title — что делает Cosmirror (функция продукта), до 70 символов.
-  text — 1–2 предложения, как помогает этому человеку через его паттерн/фокус.
-- outcomes.cards: key НЕ МЕНЯЙ; label/before/after/hint можно переписать; after > before.
+- product_pitch: ЧТО В ОТЧЁТЕ (не второй инсайт).
+  title держи: «Что ты получишь в подробном разборе».
+  text — РОВНО 2 короткие строки (разбор реакций/сценариев + ясность), до ~160 символов.
+  Без NASA/JPL/эфемерид и без «через неделю».
+- outcomes.cards: key ТОЧНО natal / cycles / crossings / focus — это блоки расчёта,
+  не мягкие выгоды («ясность», «выбор»). label/hint можно уточнить под фокус;
+  before/after служебные; after > before.
 - offer.title оставь ТОЧНО «Стань ближе к своему истинному я через подробный разбор»;
-  cta ТОЧНО «Получить за 777»; price ТОЧНО «777 ₽/мес»; text — 2 строки через \\n.
+  cta ТОЧНО «Получить за 777»; price ТОЧНО «777 ₽»; text можно оставить пустым.
 - Не добавляй новых ключей. Не удаляй существующие элементы списков.
 - Имя пользователя в текстах не пиши (его покажут отдельно).
 - Язык: русский. Обращение на «ты».
@@ -113,7 +118,7 @@ def merge_edited_copy(insight: dict[str, Any], edited: dict[str, Any]) -> dict[s
         p_title = str(pitch.get("title") or base_pitch.get("title") or "").strip()
         p_text = str(pitch.get("text") or base_pitch.get("text") or "").strip()
         if p_title and p_text:
-            out["product_pitch"] = {"title": p_title[:90], "text": p_text[:280]}
+            out["product_pitch"] = {"title": p_title[:90], "text": p_text[:360]}
 
     outcomes = edited.get("outcomes")
     if isinstance(outcomes, dict):
@@ -157,7 +162,7 @@ def merge_edited_copy(insight: dict[str, Any], edited: dict[str, Any]) -> dict[s
             "title": "Стань ближе к своему истинному я через подробный разбор",
             "text": text[:500] if text else base.get("text", ""),
             "cta": "Получить за 777",
-            "price": "777 ₽/мес",
+            "price": "777 ₽",
         }
 
     out["editorial_passed"] = True

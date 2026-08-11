@@ -1,6 +1,9 @@
 from django.contrib.auth.models import User
+from django.core.validators import validate_email
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import serializers
+import re
 
 from .models import (
     GlobalPlanetaryCycle,
@@ -13,6 +16,22 @@ from .models import (
     UserInput,
     WaitlistLead,
 )
+
+_CONTACTS_SUPPORT = "Введи реальные данные — нужно верифицировать Telegram и email"
+_TELEGRAM_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{4,31}$")
+
+
+def _normalize_telegram(value: str) -> str:
+    raw = (value or "").strip()
+    for prefix in ("https://t.me/", "http://t.me/", "https://telegram.me/", "http://telegram.me/"):
+        if raw.lower().startswith(prefix):
+            raw = raw[len(prefix) :]
+            break
+    return raw.lstrip("@")
+
+
+def _is_valid_telegram(value: str) -> bool:
+    return bool(_TELEGRAM_RE.fullmatch(_normalize_telegram(value)))
 
 
 class ProfileSerializer(serializers.ModelSerializer):
@@ -177,13 +196,19 @@ class OnboardingStepSubmitSerializer(serializers.Serializer):
         elif step.step_type == OnboardingStep.StepType.WAITLIST:
             email = (payload.get("email") or "").strip()
             telegram = (payload.get("telegram") or "").strip()
-            if not telegram:
+            if not telegram or not _is_valid_telegram(telegram):
                 raise serializers.ValidationError(
-                    {"payload": {"telegram": ["Укажи Telegram — так мы сможем открыть тебе разбор."]}}
+                    {"payload": {"telegram": [_CONTACTS_SUPPORT]}}
                 )
             if not email:
                 raise serializers.ValidationError(
-                    {"payload": {"email": ["Укажи email — так мы сможем открыть тебе разбор."]}}
+                    {"payload": {"email": [_CONTACTS_SUPPORT]}}
+                )
+            try:
+                validate_email(email)
+            except DjangoValidationError:
+                raise serializers.ValidationError(
+                    {"payload": {"email": [_CONTACTS_SUPPORT]}}
                 )
 
         answer, _ = OnboardingStepAnswer.objects.update_or_create(
