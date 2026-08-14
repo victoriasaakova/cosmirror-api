@@ -1,5 +1,7 @@
 from typing import Optional
+import threading
 
+from django.conf import settings
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
@@ -11,6 +13,7 @@ from .models import (
     NatalChart,
     OnboardingSession,
     OnboardingStep,
+    Order,
     UserInput,
     WaitlistLead,
 )
@@ -21,6 +24,7 @@ from .serializers import (
     OnboardingSessionSerializer,
     OnboardingStepSerializer,
     OnboardingStepSubmitSerializer,
+    OrderSerializer,
     UserInputSerializer,
     UserSerializer,
     WaitlistLeadSerializer,
@@ -29,7 +33,15 @@ from .services.geo import GeoLookupError, lookup_place, suggest_places
 from .services.insight import build_insight
 from .services.natal import calculate_sky_now
 from .services.onboarding_astro import build_chart_and_insight
+from .services.orders import (
+    OrderError,
+    apply_prodamus_webhook,
+    create_or_resume_order,
+    refresh_payment_link_if_stale,
+    validate_idempotency_key,
+)
 from .services.personalize import is_personalized, personalize_insight
+from .services.prodamus import extract_sign, is_configured, parse_webhook_payload, verify_webhook
 
 
 def _quiz_from_session(session: OnboardingSession) -> dict:
@@ -78,6 +90,19 @@ def _ensure_personalized_insight(
         chart.save(update_fields=["chart_data", "updated_at"])
 
     return personalized
+
+
+_insight_locks_guard = threading.Lock()
+_insight_locks: dict[str, threading.Lock] = {}
+
+
+def _insight_lock_for(token: str) -> threading.Lock:
+    with _insight_locks_guard:
+        lock = _insight_locks.get(token)
+        if lock is None:
+            lock = threading.Lock()
+            _insight_locks[token] = lock
+        return lock
 
 
 
@@ -288,6 +313,10 @@ class OnboardingInsightView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request, token):
+        with _insight_lock_for(str(token)):
+            return self._build_insight_response(token)
+
+    def _build_insight_response(self, token):
         session = get_object_or_404(OnboardingSession, token=token)
         chart = NatalChart.objects.filter(session=session).first()
 
@@ -387,4 +416,94 @@ class SkyNowView(APIView):
         sky = calculate_sky_now()
         insight = build_insight({"planets": {}, "has_birth_time": False}, sky)
         return Response({"sky_now": sky, "cycles": insight.get("cycles")})
+
+
+class OrderCreateView(APIView):
+    """
+    Создать заказ у нас и платёжную ссылку в Prodamus.
+    Обязателен заголовок Idempotency-Key — повтор с тем же ключом
+    и тем же телом возвращает тот же заказ, без второго платежа.
+    """
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes: list = []
+
+    def post(self, request):
+        try:
+            idempotency_key = validate_idempotency_key(
+                request.headers.get("Idempotency-Key")
+                or request.data.get("idempotency_key")
+            )
+        except OrderError as exc:
+            return Response({"detail": exc.detail}, status=exc.status)
+
+        token = (request.data.get("session_token") or request.data.get("token") or "").strip()
+        if not token:
+            return Response({"detail": "session_token обязателен."}, status=status.HTTP_400_BAD_REQUEST)
+        session = get_object_or_404(OnboardingSession, token=token)
+
+        try:
+            order, created = create_or_resume_order(
+                session=session,
+                idempotency_key=idempotency_key,
+            )
+        except OrderError as exc:
+            return Response({"detail": exc.detail}, status=exc.status)
+
+        return Response(
+            OrderSerializer(order).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+class OrderDetailView(APIView):
+    permission_classes = [permissions.AllowAny]
+    authentication_classes: list = []
+
+    def get(self, request, public_id):
+        order = get_object_or_404(Order, public_id=public_id)
+        try:
+            order = refresh_payment_link_if_stale(order)
+        except OrderError:
+            pass
+        return Response(OrderSerializer(order).data)
+
+
+class ProdamusWebhookView(APIView):
+    """
+    urlNotification Prodamus. Подтверждение оплаты — только валидная Sign.
+    https://help.prodamus.ru/payform/uvedomleniya/kak-ustroena-otpravka-uvedomlenii-ob-oplate
+    """
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes: list = []
+
+    def post(self, request):
+        if not is_configured():
+            return Response({"detail": "Prodamus не настроен."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        signature = extract_sign(request.headers)
+        if not signature:
+            return Response({"detail": "Нет заголовка Sign."}, status=status.HTTP_400_BAD_REQUEST)
+
+        payload = parse_webhook_payload(request.data)
+        if not payload and request.body:
+            try:
+                payload = parse_webhook_payload(request.body.decode("utf-8"))
+            except Exception:
+                payload = {}
+        if not payload:
+            return Response({"detail": "Пустое тело уведомления."}, status=status.HTTP_400_BAD_REQUEST)
+
+        secret = settings.PRODAMUS_SECRET_KEY
+        allow_demo = bool(settings.PRODAMUS_DEMO_MODE)
+        if not verify_webhook(payload, secret, signature, allow_demo=allow_demo):
+            return Response({"detail": "Неверная подпись."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            order = apply_prodamus_webhook(payload)
+        except OrderError as exc:
+            return Response({"detail": exc.detail}, status=exc.status)
+
+        return Response({"status": "ok", "order_id": str(order.public_id), "order_status": order.status})
 

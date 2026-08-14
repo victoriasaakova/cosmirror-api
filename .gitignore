@@ -11,3 +11,4 @@ staticfiles/
 .pytest_cache/
 core/services/ephemeris/*.bsp
 core/services/ephemeris/*.json
+core/services/ephemeris/swiss/*.se1

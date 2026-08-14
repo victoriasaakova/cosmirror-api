@@ -372,3 +372,95 @@ class GlobalPlanetaryCycle(models.Model):
 
     def __str__(self) -> str:
         return self.title or self.key
+
+
+class Order(models.Model):
+    """
+    Заказ на персональный разбор. Создаётся нашим бэкендом, затем
+    в Prodamus уходит платёжная ссылка с order_id = public_id.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Создаётся"
+        AWAITING_PAYMENT = "awaiting_payment", "Ожидает оплаты"
+        PAID = "paid", "Оплачен"
+        CANCELED = "canceled", "Отменён"
+        DENIED = "denied", "Отклонён"
+        FAILED = "failed", "Ошибка"
+
+    public_id = models.UUIDField(
+        default=uuid.uuid4, unique=True, editable=False, db_index=True
+    )
+    idempotency_key = models.CharField(
+        "Ключ идемпотентности",
+        max_length=128,
+        unique=True,
+        db_index=True,
+    )
+    idempotency_request_hash = models.CharField(
+        "Хэш запроса идемпотентности",
+        max_length=64,
+        help_text="SHA-256 канонического тела (сессия + sku). Повтор с другим телом → 409.",
+    )
+
+    session = models.ForeignKey(
+        OnboardingSession,
+        on_delete=models.PROTECT,
+        related_name="orders",
+    )
+    waitlist_lead = models.ForeignKey(
+        "WaitlistLead",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="orders",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="orders",
+    )
+
+    customer_email = models.EmailField("Email", blank=True)
+    customer_phone = models.CharField("Телефон", max_length=32, blank=True)
+    customer_telegram = models.CharField("Telegram", max_length=64, blank=True)
+
+    product_sku = models.SlugField("SKU", max_length=64)
+    product_name = models.CharField("Товар", max_length=255)
+    amount = models.DecimalField("Сумма", max_digits=10, decimal_places=2)
+    currency = models.CharField("Валюта", max_length=8, default="rub")
+
+    status = models.CharField(
+        max_length=24,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+    )
+    payment_url = models.URLField("Ссылка на оплату", max_length=500, blank=True)
+    prodamus_order_id = models.CharField(
+        "ID заказа в Prodamus",
+        max_length=64,
+        blank=True,
+        db_index=True,
+    )
+    paid_at = models.DateTimeField("Оплачен", null=True, blank=True)
+    fulfilled_at = models.DateTimeField("Отчёт отправлен", null=True, blank=True)
+    fulfillment_error = models.TextField("Ошибка отправки отчёта", blank=True)
+    webhook_payload = models.JSONField("Последний webhook", default=dict, blank=True)
+    last_error = models.TextField("Последняя ошибка", blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Заказ"
+        verbose_name_plural = "Заказы"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["session", "product_sku", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.public_id} ({self.status})"

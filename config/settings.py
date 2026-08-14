@@ -7,7 +7,7 @@ import os
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -23,6 +23,13 @@ ALLOWED_HOSTS = [
     for h in os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
     if h.strip()
 ]
+if DEBUG:
+    ALLOWED_HOSTS = list(
+        dict.fromkeys(
+            ALLOWED_HOSTS
+            + ["*", ".ngrok-free.app", ".ngrok.io", ".trycloudflare.com", ".loca.lt"]
+        )
+    )
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -105,6 +112,15 @@ CORS_ALLOWED_ORIGINS = [
     if o.strip()
 ]
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = (
+    "accept",
+    "authorization",
+    "content-type",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+    "idempotency-key",
+)
 
 # Trust X-Forwarded-Proto from nginx when serving HTTPS
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
@@ -127,3 +143,48 @@ POLZA_BASE_URL = (os.getenv("POLZA_BASE_URL") or "https://polza.ai/api/v1").stri
 POLZA_MODEL = (os.getenv("POLZA_MODEL") or "openai/gpt-5.6-terra-pro").strip()
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 GROQ_MODEL = (os.getenv("GROQ_MODEL") or "qwen/qwen3.6-27b").strip()
+
+# Публичные URL (редиректы после оплаты + webhook для Prodamus)
+FRONTEND_URL = (os.getenv("FRONTEND_URL") or "http://localhost:3000").rstrip("/")
+PUBLIC_API_URL = (os.getenv("PUBLIC_API_URL") or "http://127.0.0.1:8000").rstrip("/")
+
+# Товар по умолчанию. Имя попадает в чек (54-ФЗ, до 128 символов).
+COSMIRROR_PRODUCT_SKU = (os.getenv("COSMIRROR_PRODUCT_SKU") or "personal_report").strip()
+COSMIRROR_PRODUCT_NAME = (
+    os.getenv("COSMIRROR_PRODUCT_NAME") or "Персональный астрологический отчёт"
+).strip()
+COSMIRROR_PRODUCT_PRICE = (os.getenv("COSMIRROR_PRODUCT_PRICE") or "777").strip()
+# «Доступы к материалам» / paid_content — обязательно для чека, даже в демо.
+COSMIRROR_PRODUCT_PAID_CONTENT = (
+    os.getenv("COSMIRROR_PRODUCT_PAID_CONTENT")
+    or (
+        "Персональный астрологический отчёт Cosmirror. "
+        "После оплаты отправим отчёт на email, указанный при оформлении. "
+        "https://cosmirror.ru"
+    )
+).strip()
+
+# Prodamus Payform: https://help.prodamus.ru/payform/integracii/rest-api/instrukcii-dlya-samostoyatelnaya-integracii-servisov
+PRODAMUS_FORM_URL = (os.getenv("PRODAMUS_FORM_URL") or "").strip()
+PRODAMUS_SECRET_KEY = (os.getenv("PRODAMUS_SECRET_KEY") or "").strip()
+PRODAMUS_SYS = (os.getenv("PRODAMUS_SYS") or "").strip()
+PRODAMUS_DEMO_MODE = os.getenv("PRODAMUS_DEMO_MODE", "0") == "1"
+PRODAMUS_NOTIFICATION_URL = (os.getenv("PRODAMUS_NOTIFICATION_URL") or "").strip()
+
+# Почта Cosmirror: ящик hello@cosmirror.ru на хостинге REG.RU
+# https://help.reg.ru/support/hosting/nastroyka-pochty-regru/nastroyka-pochty-i-pochtovykh-kliyentovv/nastroyka-pochtovykh-kliyentovv
+RESEND_API_KEY = (os.getenv("RESEND_API_KEY") or "").strip()
+EMAIL_FROM = (os.getenv("EMAIL_FROM") or "Cosmirror <hello@cosmirror.ru>").strip()
+EMAIL_BCC = (os.getenv("EMAIL_BCC") or "hello@cosmirror.ru").strip()
+EMAIL_HOST = (os.getenv("EMAIL_HOST") or "mail.hosting.reg.ru").strip()
+EMAIL_PORT = int(os.getenv("EMAIL_PORT") or "465")
+EMAIL_HOST_USER = (os.getenv("EMAIL_HOST_USER") or "hello@cosmirror.ru").strip()
+EMAIL_HOST_PASSWORD = (os.getenv("EMAIL_HOST_PASSWORD") or "").strip()
+EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "1") == "1"
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "0") == "1"
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.smtp.EmailBackend"
+    if EMAIL_HOST_PASSWORD or RESEND_API_KEY
+    else "django.core.mail.backends.console.EmailBackend",
+)

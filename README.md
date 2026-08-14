@@ -22,14 +22,28 @@ python manage.py createsuperuser
 python manage.py runserver 8000
 ```
 
-При первом астро-расчёте Skyfield скачает `de421.bsp` (~17 МБ) в `core/services/ephemeris/`.
+При первом астро-расчёте:
+- **Swiss** (по умолчанию): нужны файлы в `core/services/ephemeris/swiss/` (`sepl_18.se1`, `semo_18.se1`, `seas_18.se1`) — см. ниже.
+- **Skyfield / NASA**: скачает `de421.bsp` (~17 МБ) в `core/services/ephemeris/`.
+
+Движок: `ASTRO_ENGINE=swiss` или `ASTRO_ENGINE=skyfield` в `.env`.
+
+```bash
+# скачать Swiss Ephemeris files
+mkdir -p core/services/ephemeris/swiss
+cd core/services/ephemeris/swiss
+curl -fsSL -O https://cdn.jsdelivr.net/gh/aloistr/swisseph@master/ephe/sepl_18.se1
+curl -fsSL -O https://cdn.jsdelivr.net/gh/aloistr/swisseph@master/ephe/semo_18.se1
+curl -fsSL -O https://cdn.jsdelivr.net/gh/aloistr/swisseph@master/ephe/seas_18.se1
+cd -
+```
 
 - Admin: http://127.0.0.1:8000/admin/
 - Health: http://127.0.0.1:8000/api/health/
 
 ## Онбординг + астро (MVP)
 
-Стек: **Skyfield (MIT) + NASA JPL**, `timezonefinder`, Nominatim. Без Swiss Ephemeris — движок сменный позже.
+Стек: **Swiss Ephemeris** (default) или **Skyfield + NASA JPL**. Переключение через `ASTRO_ENGINE`.
 
 | Method | Path | Описание |
 |--------|------|----------|

@@ -12,6 +12,7 @@ from .models import (
     OnboardingSession,
     OnboardingStep,
     OnboardingStepAnswer,
+    Order,
     Profile,
     UserInput,
     WaitlistLead,
@@ -383,3 +384,23 @@ class GlobalPlanetaryCycleSerializer(serializers.ModelSerializer):
             "is_active",
             "cycle_data",
         )
+
+
+class OrderSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(source="public_id", read_only=True)
+
+    class Meta:
+        model = Order
+        fields = (
+            "id",
+            "status",
+            "product_sku",
+            "product_name",
+            "amount",
+            "currency",
+            "payment_url",
+            "paid_at",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields

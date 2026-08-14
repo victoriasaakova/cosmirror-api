@@ -1,23 +1,36 @@
 """
-Натальный расчёт на Skyfield (MIT) + NASA JPL.
+Натальный расчёт — фасад над движками эфемерид.
 
-Движок сменный: позже можно добавить SwissEphemerisEngine
-с тем же контрактом chart_data.
+Движки:
+- swiss   → Swiss Ephemeris (pyswisseph) — по умолчанию
+- skyfield → Skyfield + NASA JPL de421.bsp
+
+Переключение: ASTRO_ENGINE=swiss|skyfield в .env
 """
 
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Any, Optional
-from zoneinfo import ZoneInfo
 
 from skyfield.api import load
 from skyfield.framelib import ecliptic_frame
 
-# Эфемериды рядом с сервисом (скачиваются один раз)
+from core.services.natal_common import (
+    SIGNS,
+    SIGNS_RU,
+    NatalCalcError,
+    local_to_utc,
+    sign_of,
+    whole_sign_houses,
+)
+
+# --- Skyfield / NASA JPL -------------------------------------------------
+
 _EPHE_DIR = Path(__file__).resolve().parent / "ephemeris"
 _EPHE_DIR.mkdir(parents=True, exist_ok=True)
 _LOADER = load
@@ -26,36 +39,6 @@ _LOADER.directory = str(_EPHE_DIR)
 _TS = None
 _EPH = None
 _EARTH = None
-
-SIGNS = [
-    "aries",
-    "taurus",
-    "gemini",
-    "cancer",
-    "leo",
-    "virgo",
-    "libra",
-    "scorpio",
-    "sagittarius",
-    "capricorn",
-    "aquarius",
-    "pisces",
-]
-
-SIGNS_RU = {
-    "aries": "Овен",
-    "taurus": "Телец",
-    "gemini": "Близнецы",
-    "cancer": "Рак",
-    "leo": "Лев",
-    "virgo": "Дева",
-    "libra": "Весы",
-    "scorpio": "Скорпион",
-    "sagittarius": "Стрелец",
-    "capricorn": "Козерог",
-    "aquarius": "Водолей",
-    "pisces": "Рыбы",
-}
 
 # Ключ API → имя тела в de421
 BODIES = {
@@ -71,10 +54,10 @@ BODIES = {
     "pluto": "pluto barycenter",
 }
 
-ENGINE_ID = "skyfield_de421"
+SKYFIELD_ENGINE_ID = "skyfield_de421"
 
 
-def _ensure_ephemeris():
+def _ensure_skyfield():
     global _TS, _EPH, _EARTH
     if _EPH is not None:
         return
@@ -93,54 +76,9 @@ class BirthMoment:
     place: str
 
 
-class NatalCalcError(Exception):
-    pass
-
-
-def local_to_utc(
-    birth_date: date,
-    birth_time: Optional[time],
-    tz_name: str,
-) -> tuple[datetime, bool]:
-    """
-    Местное время → UTC.
-    Без времени: полдень местного — стандарт для космограммы без Asc.
-    """
-    has_time = birth_time is not None
-    local_t = birth_time if has_time else time(12, 0)
-    try:
-        tz = ZoneInfo(tz_name)
-    except Exception as exc:
-        raise NatalCalcError(f"Неизвестная таймзона: {tz_name}") from exc
-
-    local_dt = datetime(
-        birth_date.year,
-        birth_date.month,
-        birth_date.day,
-        local_t.hour,
-        local_t.minute,
-        local_t.second or 0,
-        tzinfo=tz,
-    )
-    return local_dt.astimezone(timezone.utc), has_time
-
-
 def _obliquity_deg(t) -> float:
     T = (t.tt - 2451545.0) / 36525.0
     return 23.439291111 - 0.0130042 * T - 1.64e-7 * T**2 + 5.04e-7 * T**3
-
-
-def _sign_of(longitude: float) -> dict[str, Any]:
-    lon = longitude % 360.0
-    idx = int(lon // 30) % 12
-    key = SIGNS[idx]
-    return {
-        "sign": key,
-        "sign_ru": SIGNS_RU[key],
-        "sign_index": idx,
-        "degree": round(lon % 30, 2),
-        "longitude": round(lon, 4),
-    }
 
 
 def _ascendant_and_mc(t, lat: float, lon: float) -> tuple[float, float]:
@@ -156,40 +94,20 @@ def _ascendant_and_mc(t, lat: float, lon: float) -> tuple[float, float]:
     return asc, mc
 
 
-def _whole_sign_houses(asc_sign_index: int) -> list[dict[str, Any]]:
-    return [
-        {
-            "house": i + 1,
-            "sign": SIGNS[(asc_sign_index + i) % 12],
-            "sign_ru": SIGNS_RU[SIGNS[(asc_sign_index + i) % 12]],
-            "cusp_longitude": ((asc_sign_index + i) % 12) * 30,
-        }
-        for i in range(12)
-    ]
-
-
-def _planet_longitudes(dt_utc: datetime) -> dict[str, dict[str, Any]]:
-    _ensure_ephemeris()
+def _planet_longitudes_skyfield(dt_utc: datetime) -> dict[str, dict[str, Any]]:
+    _ensure_skyfield()
     assert _TS is not None and _EPH is not None and _EARTH is not None
 
     t = _TS.from_datetime(dt_utc)
-    # Геоцентрически — стандарт натальной карты
     planets: dict[str, dict[str, Any]] = {}
     for key, body_name in BODIES.items():
         astrometric = _EARTH.at(t).observe(_EPH[body_name]).apparent()
         _lat, lon_ecl, _ = astrometric.frame_latlon(ecliptic_frame)
-        planets[key] = _sign_of(lon_ecl.degrees)
+        planets[key] = sign_of(lon_ecl.degrees)
     return planets
 
 
-def calculate_positions(dt_utc: datetime) -> dict[str, dict[str, Any]]:
-    """Публичный хелпер: положения планет на момент UTC."""
-    if dt_utc.tzinfo is None:
-        dt_utc = dt_utc.replace(tzinfo=timezone.utc)
-    return _planet_longitudes(dt_utc.astimezone(timezone.utc))
-
-
-def calculate_natal(
+def _calculate_natal_skyfield(
     *,
     birth_date: date,
     birth_time: Optional[time],
@@ -198,16 +116,11 @@ def calculate_natal(
     timezone_name: str,
     place: str = "",
 ) -> dict[str, Any]:
-    """
-    Основной расчёт натала для онбординга.
-
-    Без времени: планеты точны для знаков (полдень local), Asc/дома не отдаём.
-    """
     dt_utc, has_time = local_to_utc(birth_date, birth_time, timezone_name)
-    planets = _planet_longitudes(dt_utc)
+    planets = _planet_longitudes_skyfield(dt_utc)
 
     result: dict[str, Any] = {
-        "engine": ENGINE_ID,
+        "engine": SKYFIELD_ENGINE_ID,
         "system": "tropical",
         "datetime_utc": dt_utc.isoformat().replace("+00:00", "Z"),
         "timezone": timezone_name,
@@ -232,15 +145,15 @@ def calculate_natal(
         ]
         return result
 
-    _ensure_ephemeris()
+    _ensure_skyfield()
     assert _TS is not None
     t = _TS.from_datetime(dt_utc)
     asc_deg, mc_deg = _ascendant_and_mc(t, float(latitude), float(longitude))
-    asc = _sign_of(asc_deg)
-    mc = _sign_of(mc_deg)
+    asc = sign_of(asc_deg)
+    mc = sign_of(mc_deg)
     result["ascendant"] = asc
     result["midheaven"] = mc
-    result["houses"] = _whole_sign_houses(asc["sign_index"])
+    result["houses"] = whole_sign_houses(asc["sign_index"])
     result["house_system"] = "whole_sign"
     for data in planets.values():
         data["house"] = ((data["sign_index"] - asc["sign_index"]) % 12) + 1
@@ -248,14 +161,84 @@ def calculate_natal(
     return result
 
 
-def calculate_sky_now(when: Optional[datetime] = None) -> dict[str, Any]:
-    """Текущие положения планет (для циклов на онбординге)."""
+def _calculate_sky_now_skyfield(when: Optional[datetime] = None) -> dict[str, Any]:
     moment = when or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
-    planets = _planet_longitudes(moment.astimezone(timezone.utc))
+    planets = _planet_longitudes_skyfield(moment.astimezone(timezone.utc))
     return {
-        "engine": ENGINE_ID,
+        "engine": SKYFIELD_ENGINE_ID,
         "datetime_utc": moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         "planets": planets,
     }
+
+
+# --- facade --------------------------------------------------------------
+
+def active_engine() -> str:
+    """swiss | skyfield"""
+    raw = (os.getenv("ASTRO_ENGINE") or "swiss").strip().lower()
+    if raw in ("skyfield", "nasa", "de421", "skyfield_de421"):
+        return "skyfield"
+    return "swiss"
+
+
+def calculate_positions(dt_utc: datetime) -> dict[str, dict[str, Any]]:
+    """Публичный хелпер: положения планет на момент UTC."""
+    if active_engine() == "skyfield":
+        if dt_utc.tzinfo is None:
+            dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+        return _planet_longitudes_skyfield(dt_utc.astimezone(timezone.utc))
+    from core.services import swiss_engine
+
+    return swiss_engine.calculate_positions(dt_utc)
+
+
+def calculate_natal(
+    *,
+    birth_date: date,
+    birth_time: Optional[time],
+    latitude: float,
+    longitude: float,
+    timezone_name: str,
+    place: str = "",
+) -> dict[str, Any]:
+    """
+    Основной расчёт натала.
+
+    Без времени: планеты на полдень local, Asc/дома не отдаём.
+    """
+    if active_engine() == "skyfield":
+        return _calculate_natal_skyfield(
+            birth_date=birth_date,
+            birth_time=birth_time,
+            latitude=latitude,
+            longitude=longitude,
+            timezone_name=timezone_name,
+            place=place,
+        )
+    from core.services import swiss_engine
+
+    return swiss_engine.calculate_natal(
+        birth_date=birth_date,
+        birth_time=birth_time,
+        latitude=latitude,
+        longitude=longitude,
+        timezone_name=timezone_name,
+        place=place,
+    )
+
+
+def calculate_sky_now(when: Optional[datetime] = None) -> dict[str, Any]:
+    """Текущие положения планет (для циклов на онбординге)."""
+    if active_engine() == "skyfield":
+        return _calculate_sky_now_skyfield(when)
+    from core.services import swiss_engine
+
+    return swiss_engine.calculate_sky_now(when)
+
+
+# Back-compat aliases used elsewhere
+ENGINE_ID = SKYFIELD_ENGINE_ID  # legacy; реальный engine смотри в chart_data["engine"]
+_sign_of = sign_of
+_whole_sign_houses = whole_sign_houses

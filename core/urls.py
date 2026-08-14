@@ -38,4 +38,12 @@ urlpatterns = [
     path("astro/charts/", views.NatalChartListView.as_view(), name="natal-charts"),
     path("astro/cycles/", views.GlobalCycleListView.as_view(), name="global-cycles"),
     path("astro/sky-now/", views.SkyNowView.as_view(), name="sky-now"),
+    # Оплата Prodamus
+    path("orders/", views.OrderCreateView.as_view(), name="order-create"),
+    path("orders/<uuid:public_id>/", views.OrderDetailView.as_view(), name="order-detail"),
+    path(
+        "payments/prodamus/webhook/",
+        views.ProdamusWebhookView.as_view(),
+        name="prodamus-webhook",
+    ),
 ]

@@ -1,4 +1,4 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 
@@ -9,6 +9,7 @@ from .models import (
     OnboardingSession,
     OnboardingStep,
     OnboardingStepAnswer,
+    Order,
     Profile,
     UserInput,
     WaitlistLead,
@@ -152,6 +153,63 @@ class GlobalPlanetaryCycleAdmin(admin.ModelAdmin):
     list_filter = ("is_active",)
     search_fields = ("key", "title")
     prepopulated_fields = {"key": ("title",)}
+
+
+@admin.register(Order)
+class OrderAdmin(admin.ModelAdmin):
+    list_display = (
+        "public_id",
+        "status",
+        "amount",
+        "customer_email",
+        "product_sku",
+        "prodamus_order_id",
+        "created_at",
+        "paid_at",
+        "fulfilled_at",
+    )
+    list_filter = ("status", "created_at")
+    search_fields = (
+        "public_id",
+        "idempotency_key",
+        "customer_email",
+        "customer_phone",
+        "customer_telegram",
+        "prodamus_order_id",
+        "session__token",
+    )
+    readonly_fields = (
+        "public_id",
+        "idempotency_key",
+        "idempotency_request_hash",
+        "payment_url",
+        "prodamus_order_id",
+        "webhook_payload",
+        "created_at",
+        "updated_at",
+        "paid_at",
+        "fulfilled_at",
+        "fulfillment_error",
+    )
+    actions = ("send_demo_report",)
+
+    @admin.action(description="Отметить оплаченным и отправить демо-отчёт")
+    def send_demo_report(self, request, queryset):
+        from core.services.fulfillment import FulfillmentError, mark_paid_and_deliver
+
+        ok = 0
+        for order in queryset:
+            try:
+                mark_paid_and_deliver(order, force=True)
+                ok += 1
+            except FulfillmentError as exc:
+                self.message_user(
+                    request,
+                    f"{order.public_id}: {exc}",
+                    level=messages.ERROR,
+                )
+        if ok:
+            self.message_user(request, f"Демо-отчёт отправлен: {ok}", level=messages.SUCCESS)
 
 
 class UserAdmin(BaseUserAdmin):
