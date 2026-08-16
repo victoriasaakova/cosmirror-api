@@ -191,6 +191,29 @@ class OrderApiTests(TestCase):
         self.assertEqual(Order.objects.count(), 1)
         self.assertEqual(mocked.call_count, 1)
 
+    @patch(
+        "core.services.orders.create_payment_link",
+        side_effect=["https://payform.ru/old/", "https://payform.ru/fresh/"],
+    )
+    def test_awaiting_link_is_reissued_after_retry_window(self, mocked):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        first = self._create(key="retry-key-aaaa")
+        self.assertEqual(first.status_code, 201)
+        order = Order.objects.get(public_id=first.json()["id"])
+        Order.objects.filter(pk=order.pk).update(
+            updated_at=timezone.now() - timedelta(minutes=2)
+        )
+        again = self._create(key="retry-key-aaaa")
+        self.assertEqual(again.status_code, 201, again.content)
+        self.assertNotEqual(first.json()["id"], again.json()["id"])
+        self.assertEqual(again.json()["payment_url"], "https://payform.ru/fresh/")
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.CANCELED)
+        self.assertEqual(mocked.call_count, 2)
+
     @patch("core.services.orders.create_payment_link", return_value="https://payform.ru/short/")
     def test_stale_do_pay_url_is_rebuilt(self, mocked):
         first = self._create(key="rebuild-key-1")

@@ -8,6 +8,7 @@ import logging
 import re
 import urllib.parse
 import uuid
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
@@ -33,6 +34,10 @@ _TERMINAL = {
     Order.Status.CANCELED,
     Order.Status.DENIED,
 }
+# Повторный клик «оплатить» через столько секунд выпускает новую ссылку Prodamus.
+# Раньше тот же Idempotency-Key возвращал короткую ссылку с payments_limit=1 —
+# после демо-оплаты Prodamus писал «лимит достигнут».
+_REISSUE_AFTER = timedelta(seconds=30)
 
 
 class OrderError(Exception):
@@ -198,6 +203,19 @@ def _ensure_payment_link(order: Order) -> Order:
     return order
 
 
+def _should_reissue_payment_link(order: Order, *, created: bool) -> bool:
+    if created or order.status != Order.Status.AWAITING_PAYMENT or not order.payment_url:
+        return False
+    return (timezone.now() - order.updated_at) > _REISSUE_AFTER
+
+
+def _retire_unpaid_order(order: Order) -> None:
+    order.idempotency_key = f"retired-{order.public_id}"[:128]
+    order.status = Order.Status.CANCELED
+    order.last_error = "Ссылка перевыпущена после повторной попытки оплаты."
+    order.save(update_fields=["idempotency_key", "status", "last_error", "updated_at"])
+
+
 def create_or_resume_order(*, session: OnboardingSession, idempotency_key: str) -> tuple[Order, bool]:
     """
     Создать заказ и ссылку в Prodamus.
@@ -251,6 +269,10 @@ def create_or_resume_order(*, session: OnboardingSession, idempotency_key: str) 
             )
         order = existing
         created = False
+
+    if _should_reissue_payment_link(order, created=created):
+        _retire_unpaid_order(order)
+        return create_or_resume_order(session=session, idempotency_key=idempotency_key)
 
     if order.status in _TERMINAL:
         return order, created
