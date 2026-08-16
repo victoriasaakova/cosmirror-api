@@ -4,8 +4,9 @@
 Документация:
 https://help.prodamus.ru/payform/integracii/rest-api/instrukcii-dlya-samostoyatelnaya-integracii-servisov
 
-Бэкенд — драйвер заказа: POST/GET do=link с товаром и order_id,
-получает короткую ссылку payform.ru/xxxxx/. Подтверждение — webhook с Sign.
+Бэкенд — драйвер заказа: подписанный do=pay с товаром и order_id.
+Короткая do=link сразу открывает способы оплаты и прячет промокод Prodamus.
+Подтверждение — webhook с Sign.
 """
 
 from __future__ import annotations
@@ -241,7 +242,7 @@ def build_checkout_payload(
 
 
 def signed_checkout_url(payload: dict[str, Any]) -> str:
-    """GET-ссылка на cosmirror.payform.ru с подписью — не отдаём её в браузер."""
+    """GET-ссылка на cosmirror.payform.ru с подписью — форма заказа и промокод."""
     secret = _secret()
     signed = dict(payload)
     signed["signature"] = sign(payload, secret)
@@ -286,9 +287,9 @@ def create_payment_link(
     discount_value: Decimal | str = "",
 ) -> str:
     """
-    Короткая персональная ссылка (do=link).
-    Длинный do=pay в браузере при выборе способа оплаты уводит с payform
-    (часто на localhost / https://localhost).
+    Подписанный do=pay: форма Prodamus с полем промокода.
+    Короткая do=link (paylink=1) сразу открывает СБП и блокирует промокод.
+    Телефон в ссылку лучше не класть — иначе форма тоже пропускается.
     """
     payload = build_checkout_payload(
         order_id=order_id,
@@ -303,9 +304,9 @@ def create_payment_link(
         url_return=url_return,
         url_notification=url_notification,
         discount_value=discount_value,
-        action="link",
+        action="pay",
     )
-    return _fetch_short_link(payload)
+    return signed_checkout_url(payload)
 
 
 def extract_sign(headers) -> str:

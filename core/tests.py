@@ -91,12 +91,8 @@ class CheckoutUrlTests(TestCase):
     PRODAMUS_DEMO_MODE=True,
     FRONTEND_URL="http://localhost:3000",
 )
-class ShortLinkTests(TestCase):
-    @patch("core.services.prodamus.urllib.request.urlopen")
-    def test_create_payment_link_uses_do_link(self, mocked_open):
-        mocked_open.return_value.__enter__.return_value.read.return_value = (
-            b"https://payform.ru/u8zDE/"
-        )
+class CheckoutLinkTests(TestCase):
+    def test_create_payment_link_uses_do_pay_form(self):
         url = create_payment_link(
             order_id="abc-123",
             product_name="Персональный разбор Cosmirror",
@@ -105,26 +101,30 @@ class ShortLinkTests(TestCase):
             customer_email="buyer@example.com",
             paid_content="Персональный астрологический отчёт Cosmirror",
         )
-        self.assertEqual(url, "https://payform.ru/u8zDE/")
-        request = mocked_open.call_args[0][0]
-        called = request.full_url
-        self.assertIn("do=link", called)
-        self.assertNotIn("do=pay", called)
-        self.assertNotIn("localhost", called)
-        self.assertIn("abc-123", called)
-        self.assertIn("paid_content", called)
-        self.assertIn("астрологический отчёт", unquote_plus(called))
+        self.assertIn("do=pay", url)
+        self.assertNotIn("do=link", url)
+        self.assertNotIn("localhost", url)
+        self.assertIn("abc-123", url)
+        self.assertIn("paid_content", url)
+        self.assertIn("buyer%40example.com", url)
+        self.assertIn("астрологический отчёт", unquote_plus(url))
+        self.assertIn("signature=", url)
 
-    def test_do_pay_url_is_stale(self):
+    def test_short_paylink_is_stale_do_pay_is_not(self):
         from core.services.orders import _payment_url_is_stale
 
-        self.assertTrue(
+        self.assertFalse(
             _payment_url_is_stale(
                 "https://cosmirror.payform.ru/?do=pay&order_id=1&signature=abc"
             )
         )
         self.assertTrue(_payment_url_is_stale("https://payform.ru/x/?urlSuccess=http://localhost:3000/"))
-        self.assertFalse(_payment_url_is_stale("https://payform.ru/u8zDE/"))
+        self.assertTrue(_payment_url_is_stale("https://payform.ru/u8zDE/"))
+        self.assertTrue(
+            _payment_url_is_stale(
+                "https://cosmirror.payform.ru/?invoice_id=abc&paylink=1"
+            )
+        )
 
 
 @override_settings(FRONTEND_URL="http://localhost:3000")
@@ -157,6 +157,7 @@ class OrderApiTests(TestCase):
             email="buyer@example.com",
             telegram="buyername",
             name="Вика",
+            phone="+79990000000",
         )
         self.session = OnboardingSession.objects.create(waitlist_lead=self.lead)
 
@@ -180,22 +181,23 @@ class OrderApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
-    @patch("core.services.orders.create_payment_link", return_value="https://payform.ru/u8zDE/")
+    @patch("core.services.orders.create_payment_link", return_value="https://cosmirror.payform.ru/?do=pay&signature=x")
     def test_creates_order_and_prodamus_link(self, mocked):
         response = self._create()
         self.assertEqual(response.status_code, 201, response.content)
         data = response.json()
         self.assertEqual(data["status"], "awaiting_payment")
-        self.assertEqual(data["payment_url"], "https://payform.ru/u8zDE/")
+        self.assertEqual(data["payment_url"], "https://cosmirror.payform.ru/?do=pay&signature=x")
         self.assertEqual(data["amount"], "777.00")
         order = Order.objects.get(public_id=data["id"])
         mocked.assert_called_once()
         kwargs = mocked.call_args.kwargs
         self.assertEqual(kwargs["order_id"], str(order.public_id))
         self.assertEqual(kwargs["customer_email"], "buyer@example.com")
+        self.assertEqual(kwargs["customer_phone"], "")
         self.assertIn("астрологический отчёт", kwargs["paid_content"])
 
-    @patch("core.services.orders.create_payment_link", return_value="https://payform.ru/promo/")
+    @patch("core.services.orders.create_payment_link", return_value="https://cosmirror.payform.ru/?do=pay&signature=promo")
     def test_known_promo_passes_discount_value(self, mocked):
         response = self._create(key="promo-key-aaaa", promo="test100")
         self.assertEqual(response.status_code, 201, response.content)
@@ -206,7 +208,7 @@ class OrderApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("промокод", response.json()["detail"].lower())
 
-    @patch("core.services.orders.create_payment_link", return_value="https://payform.ru/u8zDE/")
+    @patch("core.services.orders.create_payment_link", return_value="https://cosmirror.payform.ru/?do=pay&signature=x")
     def test_same_idempotency_key_returns_same_order(self, mocked):
         first = self._create(key="same-key-aaaa")
         second = self._create(key="same-key-aaaa")
@@ -218,7 +220,10 @@ class OrderApiTests(TestCase):
 
     @patch(
         "core.services.orders.create_payment_link",
-        side_effect=["https://payform.ru/old/", "https://payform.ru/fresh/"],
+        side_effect=[
+            "https://cosmirror.payform.ru/?do=pay&signature=old",
+            "https://cosmirror.payform.ru/?do=pay&signature=fresh",
+        ],
     )
     def test_awaiting_link_is_reissued_after_retry_window(self, mocked):
         from datetime import timedelta
@@ -234,25 +239,28 @@ class OrderApiTests(TestCase):
         again = self._create(key="retry-key-aaaa")
         self.assertEqual(again.status_code, 201, again.content)
         self.assertNotEqual(first.json()["id"], again.json()["id"])
-        self.assertEqual(again.json()["payment_url"], "https://payform.ru/fresh/")
+        self.assertEqual(again.json()["payment_url"], "https://cosmirror.payform.ru/?do=pay&signature=fresh")
         order.refresh_from_db()
         self.assertEqual(order.status, Order.Status.CANCELED)
         self.assertEqual(mocked.call_count, 2)
 
-    @patch("core.services.orders.create_payment_link", return_value="https://payform.ru/short/")
-    def test_stale_do_pay_url_is_rebuilt(self, mocked):
+    @patch("core.services.orders.create_payment_link", return_value="https://cosmirror.payform.ru/?do=pay&order_id=new&signature=x")
+    def test_stale_short_link_is_rebuilt(self, mocked):
         first = self._create(key="rebuild-key-1")
         self.assertEqual(first.status_code, 201)
         order = Order.objects.get(public_id=first.json()["id"])
-        order.payment_url = "https://cosmirror.payform.ru/?do=pay&order_id=old&signature=x"
+        order.payment_url = "https://payform.ru/u8zDE/"
         order.save(update_fields=["payment_url"])
         mocked.reset_mock()
         again = self._create(key="rebuild-key-1")
         self.assertEqual(again.status_code, 200)
-        self.assertEqual(again.json()["payment_url"], "https://payform.ru/short/")
+        self.assertEqual(
+            again.json()["payment_url"],
+            "https://cosmirror.payform.ru/?do=pay&order_id=new&signature=x",
+        )
         mocked.assert_called_once()
 
-    @patch("core.services.orders.create_payment_link", return_value="https://payform.ru/u8zDE/")
+    @patch("core.services.orders.create_payment_link", return_value="https://cosmirror.payform.ru/?do=pay&signature=x")
     def test_same_key_different_session_conflicts(self, _mocked):
         other = OnboardingSession.objects.create(
             waitlist_lead=WaitlistLead.objects.create(email="other@example.com")
@@ -262,7 +270,7 @@ class OrderApiTests(TestCase):
         conflict = self._create(key="shared-key-1", token=other.token)
         self.assertEqual(conflict.status_code, 409)
 
-    @patch("core.services.orders.create_payment_link", return_value="https://payform.ru/paid/")
+    @patch("core.services.orders.create_payment_link", return_value="https://cosmirror.payform.ru/?do=pay&signature=paid")
     def test_paid_order_is_reused_without_new_prodamus_call(self, mocked):
         created = self._create(key="pay-once-key")
         order = Order.objects.get(public_id=created.json()["id"])

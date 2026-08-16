@@ -438,7 +438,7 @@ class Order(models.Model):
         default=Status.PENDING,
         db_index=True,
     )
-    payment_url = models.URLField("Ссылка на оплату", max_length=500, blank=True)
+    payment_url = models.URLField("Ссылка на оплату", max_length=4000, blank=True)
     prodamus_order_id = models.CharField(
         "ID заказа в Prodamus",
         max_length=64,

@@ -167,9 +167,15 @@ def _payment_url_is_stale(url: str) -> bool:
     if not url:
         return True
     decoded = urllib.parse.unquote(url).lower()
-    if "do=pay" in decoded:
-        return True
     if "localhost" in decoded or "127.0.0.1" in decoded:
+        return True
+    if "paylink=1" in decoded:
+        return True
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.lower()
+    path = parsed.path.strip("/")
+    # Короткие https://payform.ru/xxxxx/ пропускают форму с промокодом.
+    if host.endswith("payform.ru") and path and "do=pay" not in decoded:
         return True
     return False
 
@@ -206,7 +212,7 @@ def _ensure_payment_link(order: Order, *, discount_value: Decimal | None = None)
             product_price=order.amount,
             product_sku=order.product_sku,
             customer_email=order.customer_email,
-            customer_phone=order.customer_phone,
+            customer_phone="",
             customer_extra=" · ".join(extra_parts),
             paid_content=_paid_content(order.product_name, order.amount),
             url_success=_success_url(order),
