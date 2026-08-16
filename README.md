@@ -2,6 +2,8 @@
 
 Python backend for Cosmirror: Django + Django REST Framework + SQLite + Admin.
 
+**License:** [GNU Affero General Public License v3.0](LICENSE). Corresponding source: this repository. Website offer: [cosmirror.ru/source/](https://cosmirror.ru/source/).
+
 ## Stack
 
 - Django admin — пользователи, онбординг, waitlist, вводы, астро

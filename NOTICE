@@ -1,0 +1,25 @@
+Cosmirror API
+Copyright (C) 2026 Victoria Saakova
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+Corresponding source for the running service: https://github.com/victoriasaakova/cosmirror-api
+Frontend: https://github.com/victoriasaakova/cosmirror
+Offer of source on the website: https://cosmirror.ru/source/
+
+This program uses Swiss Ephemeris by Astrodienst AG
+(https://www.astro.com/swisseph/), available under the GNU Affero
+General Public License, and the Python bindings pyswisseph (AGPL-3.0).
+The Swiss Ephemeris copyright notice must be preserved; see the upstream
+LICENSE at https://github.com/aloistr/swisseph
