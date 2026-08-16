@@ -74,6 +74,16 @@ class CheckoutUrlTests(TestCase):
         self.assertIn("pay%2Fsuccess", url)
         self.assertIn("signature=", url)
 
+    def test_discount_value_is_passed_for_promo(self):
+        payload = build_checkout_payload(
+            order_id="abc-123",
+            product_name="Персональный разбор Cosmirror",
+            product_price="777.00",
+            product_sku="personal_report",
+            discount_value="776",
+        )
+        self.assertEqual(payload["discount_value"], "776")
+
 
 @override_settings(
     PRODAMUS_FORM_URL="https://cosmirror.payform.ru/",
@@ -138,6 +148,7 @@ class LocalRedirectTests(TestCase):
     COSMIRROR_PRODUCT_SKU="personal_report",
     COSMIRROR_PRODUCT_NAME="Персональный разбор Cosmirror",
     COSMIRROR_PRODUCT_PRICE="777",
+    PRODAMUS_PROMO_DISCOUNTS="test100:776",
 )
 class OrderApiTests(TestCase):
     def setUp(self):
@@ -149,10 +160,13 @@ class OrderApiTests(TestCase):
         )
         self.session = OnboardingSession.objects.create(waitlist_lead=self.lead)
 
-    def _create(self, key="idem-key-0001", token=None, **kwargs):
+    def _create(self, key="idem-key-0001", token=None, promo="", **kwargs):
+        body = {"session_token": str(token or self.session.token)}
+        if promo:
+            body["promo_code"] = promo
         return self.client.post(
             "/api/orders/",
-            {"session_token": str(token or self.session.token)},
+            body,
             format="json",
             HTTP_IDEMPOTENCY_KEY=key,
             **kwargs,
@@ -180,6 +194,17 @@ class OrderApiTests(TestCase):
         self.assertEqual(kwargs["order_id"], str(order.public_id))
         self.assertEqual(kwargs["customer_email"], "buyer@example.com")
         self.assertIn("астрологический отчёт", kwargs["paid_content"])
+
+    @patch("core.services.orders.create_payment_link", return_value="https://payform.ru/promo/")
+    def test_known_promo_passes_discount_value(self, mocked):
+        response = self._create(key="promo-key-aaaa", promo="test100")
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(mocked.call_args.kwargs["discount_value"], Decimal("776.00"))
+
+    def test_unknown_promo_is_rejected(self):
+        response = self._create(key="promo-key-bbbb", promo="no-such")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("промокод", response.json()["detail"].lower())
 
     @patch("core.services.orders.create_payment_link", return_value="https://payform.ru/u8zDE/")
     def test_same_idempotency_key_returns_same_order(self, mocked):

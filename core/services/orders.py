@@ -86,14 +86,40 @@ def _paid_content(product_name: str, price: Decimal) -> str:
     )[:4096]
 
 
-def _request_hash(session_token: str, sku: str) -> str:
+def _request_hash(session_token: str, sku: str, promo_code: str = "") -> str:
     canonical = json.dumps(
-        {"session": str(session_token), "sku": sku},
+        {
+            "session": str(session_token),
+            "sku": sku,
+            "promo": (promo_code or "").strip().lower(),
+        },
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _discount_for_promo(code: str) -> Decimal | None:
+    raw = (code or "").strip().lower()
+    if not raw:
+        return None
+    mapping = getattr(settings, "PRODAMUS_PROMO_DISCOUNTS", "") or ""
+    for part in mapping.split(","):
+        part = part.strip()
+        if ":" not in part:
+            continue
+        name, value = part.split(":", 1)
+        if name.strip().lower() != raw:
+            continue
+        try:
+            discount = Decimal(value.strip())
+        except (InvalidOperation, TypeError) as exc:
+            raise OrderError("Некорректная скидка промокода в настройках.", 500) from exc
+        if discount <= 0:
+            raise OrderError("Скидка промокода должна быть больше нуля.", 500)
+        return discount.quantize(Decimal("0.01"))
+    raise OrderError("Такой промокод не найден.", 400)
 
 
 def _contacts(session: OnboardingSession) -> tuple[str, str, str]:
@@ -154,7 +180,7 @@ def refresh_payment_link_if_stale(order: Order) -> Order:
     return _ensure_payment_link(order)
 
 
-def _ensure_payment_link(order: Order) -> Order:
+def _ensure_payment_link(order: Order, *, discount_value: Decimal | None = None) -> Order:
     sku, name, price = _product()
     name_stale = order.product_name != name
     if order.payment_url and not _payment_url_is_stale(order.payment_url) and not name_stale:
@@ -186,6 +212,7 @@ def _ensure_payment_link(order: Order) -> Order:
             url_success=_success_url(order),
             url_return=_return_url(),
             url_notification=notification_url(),
+            discount_value=discount_value or "",
         )
     except ProdamusError as exc:
         order.status = Order.Status.FAILED
@@ -216,14 +243,21 @@ def _retire_unpaid_order(order: Order) -> None:
     order.save(update_fields=["idempotency_key", "status", "last_error", "updated_at"])
 
 
-def create_or_resume_order(*, session: OnboardingSession, idempotency_key: str) -> tuple[Order, bool]:
+def create_or_resume_order(
+    *,
+    session: OnboardingSession,
+    idempotency_key: str,
+    promo_code: str = "",
+) -> tuple[Order, bool]:
     """
     Создать заказ и ссылку в Prodamus.
     Повтор с тем же Idempotency-Key и тем же телом возвращает тот же заказ.
     Возвращает (order, created).
     """
     sku, name, price = _product()
-    request_hash = _request_hash(str(session.token), sku)
+    promo = (promo_code or "").strip()
+    discount = _discount_for_promo(promo) if promo else None
+    request_hash = _request_hash(str(session.token), sku, promo)
     email, phone, telegram = _contacts(session)
     if not email:
         raise OrderError("Сначала укажи email на шаге контактов.", 400)
@@ -272,7 +306,11 @@ def create_or_resume_order(*, session: OnboardingSession, idempotency_key: str) 
 
     if _should_reissue_payment_link(order, created=created):
         _retire_unpaid_order(order)
-        return create_or_resume_order(session=session, idempotency_key=idempotency_key)
+        return create_or_resume_order(
+            session=session,
+            idempotency_key=idempotency_key,
+            promo_code=promo,
+        )
 
     if order.status in _TERMINAL:
         return order, created
@@ -281,7 +319,7 @@ def create_or_resume_order(*, session: OnboardingSession, idempotency_key: str) 
         locked = Order.objects.select_for_update().get(pk=order.pk)
         if locked.status in _TERMINAL:
             return locked, created
-        order = _ensure_payment_link(locked)
+        order = _ensure_payment_link(locked, discount_value=discount)
     _send_demo_report_if_needed(order)
     return order, created
 

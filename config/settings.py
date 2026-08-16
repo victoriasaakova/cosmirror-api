@@ -170,6 +170,9 @@ PRODAMUS_SECRET_KEY = (os.getenv("PRODAMUS_SECRET_KEY") or "").strip()
 PRODAMUS_SYS = (os.getenv("PRODAMUS_SYS") or "").strip()
 PRODAMUS_DEMO_MODE = os.getenv("PRODAMUS_DEMO_MODE", "0") == "1"
 PRODAMUS_NOTIFICATION_URL = (os.getenv("PRODAMUS_NOTIFICATION_URL") or "").strip()
+# Короткие do=link счета игнорируют ?ref=. Скидку надо передать как discount_value.
+# Формат: code:rubles,code2:rubles
+PRODAMUS_PROMO_DISCOUNTS = (os.getenv("PRODAMUS_PROMO_DISCOUNTS") or "test100:776").strip()
 
 # Почта Cosmirror: ящик hello@cosmirror.ru на хостинге REG.RU
 # https://help.reg.ru/support/hosting/nastroyka-pochty-regru/nastroyka-pochty-i-pochtovykh-kliyentovv/nastroyka-pochtovykh-kliyentovv

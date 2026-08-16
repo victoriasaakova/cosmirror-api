@@ -446,6 +446,7 @@ class OrderCreateView(APIView):
             order, created = create_or_resume_order(
                 session=session,
                 idempotency_key=idempotency_key,
+                promo_code=str(request.data.get("promo_code") or "").strip(),
             )
         except OrderError as exc:
             return Response({"detail": exc.detail}, status=exc.status)

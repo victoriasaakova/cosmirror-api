@@ -192,6 +192,7 @@ def build_checkout_payload(
     url_success: str = "",
     url_return: str = "",
     url_notification: str = "",
+    discount_value: Decimal | str = "",
     action: str = "pay",
 ) -> dict[str, Any]:
     """Параметры персональной оплаты: товар, сумма, order_id, возврат на наш сайт."""
@@ -226,6 +227,8 @@ def build_checkout_payload(
         payload["urlReturn"] = url_return
     if url_notification:
         payload["urlNotification"] = url_notification
+    if discount_value not in ("", None):
+        payload["discount_value"] = format(Decimal(str(discount_value)), "f")
     sys_code = (getattr(settings, "PRODAMUS_SYS", "") or "").strip()
     if sys_code:
         payload["sys"] = sys_code
@@ -280,6 +283,7 @@ def create_payment_link(
     url_success: str = "",
     url_return: str = "",
     url_notification: str = "",
+    discount_value: Decimal | str = "",
 ) -> str:
     """
     Короткая персональная ссылка (do=link).
@@ -298,6 +302,7 @@ def create_payment_link(
         url_success=url_success,
         url_return=url_return,
         url_notification=url_notification,
+        discount_value=discount_value,
         action="link",
     )
     return _fetch_short_link(payload)
