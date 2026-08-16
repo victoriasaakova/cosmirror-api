@@ -42,6 +42,16 @@ urlpatterns = [
     path("orders/", views.OrderCreateView.as_view(), name="order-create"),
     path("orders/<uuid:public_id>/", views.OrderDetailView.as_view(), name="order-detail"),
     path(
+        "orders/<uuid:public_id>/report.pdf/",
+        views.OrderReportPdfView.as_view(),
+        name="order-report-pdf",
+    ),
+    path(
+        "orders/<uuid:public_id>/email/",
+        views.OrderEmailView.as_view(),
+        name="order-email",
+    ),
+    path(
         "payments/prodamus/webhook/",
         views.ProdamusWebhookView.as_view(),
         name="prodamus-webhook",

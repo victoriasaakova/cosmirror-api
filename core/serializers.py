@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -388,6 +389,8 @@ class GlobalPlanetaryCycleSerializer(serializers.ModelSerializer):
 
 class OrderSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(source="public_id", read_only=True)
+    report = serializers.SerializerMethodField()
+    report_pdf_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -400,7 +403,27 @@ class OrderSerializer(serializers.ModelSerializer):
             "currency",
             "payment_url",
             "paid_at",
+            "customer_email",
+            "fulfilled_at",
+            "fulfillment_error",
+            "report",
+            "report_pdf_url",
             "created_at",
             "updated_at",
         )
         read_only_fields = fields
+
+    def get_report(self, order: Order):
+        if order.status != Order.Status.PAID:
+            return None
+        from core.services.report import build_paid_report
+
+        return build_paid_report(order)
+
+    def get_report_pdf_url(self, order: Order) -> str:
+        if order.status != Order.Status.PAID:
+            return ""
+        base = (getattr(settings, "PUBLIC_API_URL", "") or "").rstrip("/")
+        if not base or "127.0.0.1" in base or "localhost" in base:
+            base = "https://api.cosmirror.ru"
+        return f"{base}/api/orders/{order.public_id}/report.pdf/"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import urllib.error
@@ -34,7 +35,14 @@ def bcc_address() -> str:
     return (getattr(settings, "EMAIL_BCC", "") or "").strip()
 
 
-def send_email(*, to: str, subject: str, text: str, html: str) -> None:
+def send_email(
+    *,
+    to: str,
+    subject: str,
+    text: str,
+    html: str,
+    attachments: list[tuple[str, bytes, str]] | None = None,
+) -> None:
     to = (to or "").strip()
     if not to:
         raise MailerError("Нет адреса получателя.")
@@ -44,14 +52,29 @@ def send_email(*, to: str, subject: str, text: str, html: str) -> None:
         )
     api_key = (getattr(settings, "RESEND_API_KEY", "") or "").strip()
     if api_key:
-        _send_resend(api_key, to=to, subject=subject, text=text, html=html)
+        _send_resend(
+            api_key,
+            to=to,
+            subject=subject,
+            text=text,
+            html=html,
+            attachments=attachments,
+        )
         return
-    _send_django(to=to, subject=subject, text=text, html=html)
+    _send_django(to=to, subject=subject, text=text, html=html, attachments=attachments)
 
 
-def _send_resend(api_key: str, *, to: str, subject: str, text: str, html: str) -> None:
+def _send_resend(
+    api_key: str,
+    *,
+    to: str,
+    subject: str,
+    text: str,
+    html: str,
+    attachments: list[tuple[str, bytes, str]] | None = None,
+) -> None:
     bcc = bcc_address()
-    payload_data = {
+    payload_data: dict = {
         "from": from_address(),
         "to": [to],
         "subject": subject,
@@ -60,6 +83,15 @@ def _send_resend(api_key: str, *, to: str, subject: str, text: str, html: str) -
     }
     if bcc and bcc.lower() != to.lower():
         payload_data["bcc"] = [bcc]
+    if attachments:
+        payload_data["attachments"] = [
+            {
+                "filename": name,
+                "content": base64.b64encode(content).decode("ascii"),
+                "content_type": mime,
+            }
+            for name, content, mime in attachments
+        ]
     payload = json.dumps(payload_data).encode("utf-8")
     req = urllib.request.Request(
         "https://api.resend.com/emails",
@@ -82,7 +114,14 @@ def _send_resend(api_key: str, *, to: str, subject: str, text: str, html: str) -
     logger.info("Resend accepted email to %s: %s", to, raw[:200])
 
 
-def _send_django(*, to: str, subject: str, text: str, html: str) -> None:
+def _send_django(
+    *,
+    to: str,
+    subject: str,
+    text: str,
+    html: str,
+    attachments: list[tuple[str, bytes, str]] | None = None,
+) -> None:
     bcc = bcc_address()
     message = EmailMultiAlternatives(
         subject=subject,
@@ -93,6 +132,8 @@ def _send_django(*, to: str, subject: str, text: str, html: str) -> None:
     )
     if html:
         message.attach_alternative(html, "text/html")
+    for name, content, mime in attachments or []:
+        message.attach(name, content, mime)
     sent = message.send(fail_silently=False)
     if not sent:
         raise MailerError("Django mail backend не отправил письмо.")

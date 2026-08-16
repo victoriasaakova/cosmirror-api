@@ -81,7 +81,7 @@ def _paid_content(product_name: str, price: Decimal) -> str:
     return (
         f"{product_name} Cosmirror за {price} ₽. "
         "Это персональный астрологический отчёт. "
-        "После оплаты отправим его на email, указанный при оформлении. "
+        "После оплаты отчёт откроется на сайте и придёт письмом с PDF. "
         "https://cosmirror.ru"
     )[:4096]
 
@@ -153,14 +153,16 @@ def _success_url(order: Order) -> str:
     base = _public_frontend_base()
     if not base:
         return ""
-    return f"{base}/pay/success/?order={order.public_id}"
+    return f"{base}/report/?order={order.public_id}"
 
 
-def _return_url() -> str:
+def _return_url(order: Order | None = None) -> str:
     base = _public_frontend_base()
     if not base:
         return ""
-    return f"{base}/onboarding/insight/"
+    if order is not None:
+        return f"{base}/pay/failed/?order={order.public_id}"
+    return f"{base}/pay/failed/"
 
 
 def _payment_url_is_stale(url: str) -> bool:
@@ -202,9 +204,9 @@ def _ensure_payment_link(order: Order, *, discount_value: Decimal | None = None)
             503,
         )
     extra_parts = []
-    if order.customer_telegram:
-        extra_parts.append(f"telegram:{order.customer_telegram}")
-    extra_parts.append(f"session:{order.session.token}")
+    extra_parts.append(
+        "Персональный астрологический отчёт. Отчёт отправим письмом после оплаты."
+    )
     try:
         url = create_payment_link(
             order_id=str(order.public_id),
@@ -216,7 +218,7 @@ def _ensure_payment_link(order: Order, *, discount_value: Decimal | None = None)
             customer_extra=" · ".join(extra_parts),
             paid_content=_paid_content(order.product_name, order.amount),
             url_success=_success_url(order),
-            url_return=_return_url(),
+            url_return=_return_url(order),
             url_notification=notification_url(),
             discount_value=discount_value or "",
         )

@@ -1,3 +1,4 @@
+from datetime import date, time
 from decimal import Decimal
 from unittest.mock import patch
 from urllib.parse import unquote_plus
@@ -5,7 +6,7 @@ from urllib.parse import unquote_plus
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
-from core.models import OnboardingSession, Order, WaitlistLead
+from core.models import NatalChart, OnboardingSession, Order, WaitlistLead
 from core.services.prodamus import (
     build_checkout_payload,
     create_payment_link,
@@ -196,6 +197,9 @@ class OrderApiTests(TestCase):
         self.assertEqual(kwargs["customer_email"], "buyer@example.com")
         self.assertEqual(kwargs["customer_phone"], "")
         self.assertIn("астрологический отчёт", kwargs["paid_content"])
+        self.assertIn("астрологический отчёт", kwargs["customer_extra"].lower())
+        self.assertNotIn("telegram:", kwargs["customer_extra"])
+        self.assertNotIn("session:", kwargs["customer_extra"])
 
     @patch("core.services.orders.create_payment_link", return_value="https://cosmirror.payform.ru/?do=pay&signature=promo")
     def test_known_promo_passes_discount_value(self, mocked):
@@ -359,8 +363,9 @@ class ProdamusWebhookTests(TestCase):
         self.order.save(update_fields=["status"])
         self.assertTrue(deliver_paid_order(self.order))
         self.assertEqual(len(mail.outbox), 1)
-        self.assertIn("Демо-версия", mail.outbox[0].subject)
+        self.assertIn("Персональный астрологический отчёт", mail.outbox[0].subject)
         self.assertEqual(mail.outbox[0].to, ["buyer@example.com"])
+        self.assertTrue(mail.outbox[0].attachments)
         self.order.refresh_from_db()
         self.assertIsNotNone(self.order.fulfilled_at)
         self.assertFalse(deliver_paid_order(self.order))
@@ -381,3 +386,106 @@ class ProdamusWebhookTests(TestCase):
         response = self.client.get(f"/api/orders/{self.order.public_id}/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id"], str(self.order.public_id))
+        self.assertIsNone(response.json()["report"])
+
+
+@override_settings(
+    FRONTEND_URL="https://cosmirror.ru",
+    PUBLIC_API_URL="https://api.cosmirror.ru",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    RESEND_API_KEY="",
+)
+class PaidReportTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        lead = WaitlistLead.objects.create(email="wrong@example.com", name="Вика")
+        session = OnboardingSession.objects.create(
+            waitlist_lead=lead,
+            birth_date=date(1993, 8, 21),
+            birth_time=time(9, 45),
+            birth_place="Москва",
+            timezone="Europe/Moscow",
+        )
+        natal = {
+            "engine": "swiss_ephemeris",
+            "has_birth_time": True,
+            "timezone": "Europe/Moscow",
+            "location": {"place": "Москва", "lat": 55.75, "lng": 37.61},
+            "planets": {
+                "sun": {
+                    "sign": "leo",
+                    "sign_ru": "Лев",
+                    "degree": 28.1,
+                    "sign_index": 4,
+                    "house": 10,
+                },
+                "moon": {
+                    "sign": "capricorn",
+                    "sign_ru": "Козерог",
+                    "degree": 12.0,
+                    "sign_index": 9,
+                    "house": 3,
+                },
+            },
+            "ascendant": {"sign": "scorpio", "sign_ru": "Скорпион", "degree": 5.0, "sign_index": 7},
+            "houses": [
+                {"house": i + 1, "sign": "scorpio", "sign_ru": "Скорпион"}
+                for i in range(12)
+            ],
+        }
+        NatalChart.objects.create(
+            session=session,
+            birth_date=date(1993, 8, 21),
+            birth_time=time(9, 45),
+            birth_place="Москва",
+            status=NatalChart.Status.READY,
+            chart_data=natal,
+        )
+        self.order = Order.objects.create(
+            idempotency_key="report-key-0001",
+            idempotency_request_hash="b" * 64,
+            session=session,
+            waitlist_lead=lead,
+            customer_email="wrong@example.com",
+            product_sku="personal_report",
+            product_name="Персональный разбор Cosmirror",
+            amount=Decimal("777.00"),
+            status=Order.Status.AWAITING_PAYMENT,
+        )
+
+    def test_success_and_fail_redirects(self):
+        from core.services.orders import _return_url, _success_url
+
+        self.assertIn("/report/?order=", _success_url(self.order))
+        self.assertIn("/pay/failed/?order=", _return_url(self.order))
+
+    def test_paid_report_pdf_and_email_fix(self):
+        from django.core import mail
+
+        self.order.status = Order.Status.PAID
+        self.order.save(update_fields=["status"])
+        detail = self.client.get(f"/api/orders/{self.order.public_id}/")
+        self.assertEqual(detail.status_code, 200)
+        report = detail.json()["report"]
+        self.assertIn("Солнце", report["sections"][1]["title"])
+        self.assertTrue(any(block["title"].startswith("1-й дом") for block in report["sections"][2]["blocks"]))
+
+        pdf = self.client.get(f"/api/orders/{self.order.public_id}/report.pdf/")
+        self.assertEqual(pdf.status_code, 200)
+        self.assertTrue(pdf.content.startswith(b"%PDF"))
+
+        response = self.client.post(
+            f"/api/orders/{self.order.public_id}/email/",
+            {"email": "right@example.com"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.customer_email, "right@example.com")
+        self.assertIsNotNone(self.order.fulfilled_at)
+        self.assertEqual(mail.outbox[-1].to, ["right@example.com"])
+        self.assertTrue(mail.outbox[-1].attachments)
+
+    def test_pdf_forbidden_until_paid(self):
+        response = self.client.get(f"/api/orders/{self.order.public_id}/report.pdf/")
+        self.assertEqual(response.status_code, 403)

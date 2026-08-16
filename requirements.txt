@@ -4,6 +4,7 @@ django-cors-headers>=4.4
 python-dotenv>=1.0
 skyfield>=1.49
 pyswisseph>=2.10
+fpdf2>=2.7.0
 timezonefinder>=6.5
 tzdata>=2024.1
 gunicorn>=22.0

@@ -2,6 +2,7 @@ from typing import Optional
 import threading
 
 from django.conf import settings
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
@@ -467,6 +468,44 @@ class OrderDetailView(APIView):
             order = refresh_payment_link_if_stale(order)
         except OrderError:
             pass
+        return Response(OrderSerializer(order).data)
+
+
+class OrderReportPdfView(APIView):
+    permission_classes = [permissions.AllowAny]
+    authentication_classes: list = []
+
+    def get(self, request, public_id):
+        order = get_object_or_404(Order, public_id=public_id)
+        if order.status != Order.Status.PAID:
+            return Response({"detail": "Отчёт будет после оплаты."}, status=status.HTTP_403_FORBIDDEN)
+        from core.services.pdf_report import render_report_pdf
+        from core.services.report import build_paid_report
+
+        pdf = render_report_pdf(build_paid_report(order))
+        response = HttpResponse(pdf, content_type="application/pdf")
+        response["Content-Disposition"] = 'attachment; filename="cosmirror-report.pdf"'
+        return response
+
+
+class OrderEmailView(APIView):
+    """Поменять почту после оплаты и отправить PDF ещё раз."""
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes: list = []
+
+    def post(self, request, public_id):
+        order = get_object_or_404(Order, public_id=public_id)
+        from core.services.fulfillment import FulfillmentError, update_order_email_and_resend
+
+        try:
+            order = update_order_email_and_resend(
+                order,
+                str(request.data.get("email") or ""),
+            )
+        except FulfillmentError as exc:
+            code = status.HTTP_409_CONFLICT if "оплат" in str(exc).lower() else status.HTTP_400_BAD_REQUEST
+            return Response({"detail": str(exc)}, status=code)
         return Response(OrderSerializer(order).data)
 
 
