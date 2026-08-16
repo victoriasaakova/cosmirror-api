@@ -123,21 +123,23 @@ def _discount_for_promo(code: str) -> Decimal | None:
 
 
 def _contacts(session: OnboardingSession) -> tuple[str, str, str]:
+    """Email/telegram с последнего шага контактов важнее старого waitlist-лида."""
     lead: WaitlistLead | None = session.waitlist_lead
-    email = (lead.email if lead else "") or ""
-    phone = (lead.phone if lead else "") or ""
-    telegram = (lead.telegram if lead else "") or ""
-    if not email:
-        waitlist_answer = (
-            session.answers.filter(step__step_type="waitlist")
-            .order_by("-updated_at")
-            .first()
-        )
-        payload = waitlist_answer.payload if waitlist_answer else {}
-        if isinstance(payload, dict):
-            email = str(payload.get("email") or "").strip()
-            phone = phone or str(payload.get("phone") or "").strip()
-            telegram = telegram or str(payload.get("telegram") or "").strip()
+    waitlist_answer = (
+        session.answers.filter(step__step_type="waitlist")
+        .order_by("-updated_at")
+        .first()
+    )
+    payload = waitlist_answer.payload if waitlist_answer else {}
+    if not isinstance(payload, dict):
+        payload = {}
+    email = str(payload.get("email") or "").strip()
+    phone = str(payload.get("phone") or "").strip()
+    telegram = str(payload.get("telegram") or "").strip()
+    if lead:
+        email = email or (lead.email or "")
+        phone = phone or (lead.phone or "")
+        telegram = telegram or (lead.telegram or "")
     return email.strip().lower(), phone.strip(), telegram.strip()
 
 
@@ -327,9 +329,37 @@ def create_or_resume_order(
         locked = Order.objects.select_for_update().get(pk=order.pk)
         if locked.status in _TERMINAL:
             return locked, created
+        locked = _sync_order_contacts(locked, email=email, phone=phone, telegram=telegram)
         order = _ensure_payment_link(locked, discount_value=discount)
     _send_demo_report_if_needed(order)
     return order, created
+
+
+def _sync_order_contacts(order: Order, *, email: str, phone: str, telegram: str) -> Order:
+    """Если на онбординге сменили почту — не тащим в Prodamus старый адрес с лида."""
+    new_email = (email or "").strip().lower()
+    changed = False
+    if new_email and (order.customer_email or "").strip().lower() != new_email:
+        order.customer_email = new_email
+        changed = True
+    if phone and order.customer_phone != phone:
+        order.customer_phone = phone
+        changed = True
+    if telegram and order.customer_telegram != telegram:
+        order.customer_telegram = telegram
+        changed = True
+    if changed:
+        order.payment_url = ""
+        order.save(
+            update_fields=[
+                "customer_email",
+                "customer_phone",
+                "customer_telegram",
+                "payment_url",
+                "updated_at",
+            ]
+        )
+    return order
 
 
 def _send_demo_report_if_needed(order: Order) -> None:

@@ -313,7 +313,13 @@ class OnboardingStepSubmitSerializer(serializers.Serializer):
             lead = WaitlistLead.objects.filter(phone=phone).first()
 
         if lead:
-            if email and not lead.email:
+            if email and lead.email and lead.email.lower() != email:
+                other = WaitlistLead.objects.filter(email=email).exclude(pk=lead.pk).first()
+                if other:
+                    lead = other
+                else:
+                    lead.email = email
+            elif email and not lead.email:
                 lead.email = email
             for key, value in defaults.items():
                 if value:

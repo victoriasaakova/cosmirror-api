@@ -6,7 +6,14 @@ from urllib.parse import unquote_plus
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
-from core.models import NatalChart, OnboardingSession, Order, WaitlistLead
+from core.models import (
+    NatalChart,
+    OnboardingSession,
+    OnboardingStep,
+    OnboardingStepAnswer,
+    Order,
+    WaitlistLead,
+)
 from core.services.prodamus import (
     build_checkout_payload,
     create_payment_link,
@@ -489,3 +496,81 @@ class PaidReportTests(TestCase):
     def test_pdf_forbidden_until_paid(self):
         response = self.client.get(f"/api/orders/{self.order.public_id}/report.pdf/")
         self.assertEqual(response.status_code, 403)
+
+
+class OnboardingEmailSourceTests(TestCase):
+    def test_contacts_step_email_wins_over_old_lead(self):
+        from core.services.orders import _contacts
+
+        lead = WaitlistLead.objects.create(email="old@icloud.com", telegram="victoriss")
+        session = OnboardingSession.objects.create(waitlist_lead=lead)
+        step = OnboardingStep.objects.create(
+            slug="contacts",
+            title="Контакты",
+            step_type=OnboardingStep.StepType.WAITLIST,
+            order=1,
+        )
+        OnboardingStepAnswer.objects.create(
+            session=session,
+            step=step,
+            completed=True,
+            payload={"email": "saakovka@gmail.com", "telegram": "victoriss"},
+        )
+        email, _phone, telegram = _contacts(session)
+        self.assertEqual(email, "saakovka@gmail.com")
+        self.assertEqual(telegram, "victoriss")
+
+    @override_settings(
+        PRODAMUS_FORM_URL="https://demo.payform.ru/",
+        PRODAMUS_SECRET_KEY="test-secret",
+        FRONTEND_URL="http://localhost:3000",
+        COSMIRROR_PRODUCT_PRICE="777",
+    )
+    @patch(
+        "core.services.orders.create_payment_link",
+        return_value="https://cosmirror.payform.ru/?do=pay&signature=fresh",
+    )
+    def test_resume_rebuilds_link_when_onboarding_email_changed(self, mocked):
+        from core.services.orders import _request_hash
+
+        lead = WaitlistLead.objects.create(email="old@icloud.com", telegram="victoriss")
+        session = OnboardingSession.objects.create(waitlist_lead=lead)
+        step = OnboardingStep.objects.create(
+            slug="contacts",
+            title="Контакты",
+            step_type=OnboardingStep.StepType.WAITLIST,
+            order=1,
+        )
+        OnboardingStepAnswer.objects.create(
+            session=session,
+            step=step,
+            completed=True,
+            payload={"email": "saakovka@gmail.com", "telegram": "victoriss"},
+        )
+        order = Order.objects.create(
+            idempotency_key="email-sync-key-01",
+            idempotency_request_hash=_request_hash(str(session.token), "personal_report", ""),
+            session=session,
+            waitlist_lead=lead,
+            customer_email="old@icloud.com",
+            product_sku="personal_report",
+            product_name="Персональный разбор Cosmirror",
+            amount=Decimal("777.00"),
+            status=Order.Status.AWAITING_PAYMENT,
+            payment_url="https://cosmirror.payform.ru/?do=pay&signature=old",
+        )
+        client = APIClient()
+        response = client.post(
+            "/api/orders/",
+            {"session_token": str(session.token)},
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="email-sync-key-01",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        order.refresh_from_db()
+        self.assertEqual(order.customer_email, "saakovka@gmail.com")
+        self.assertEqual(mocked.call_args.kwargs["customer_email"], "saakovka@gmail.com")
+        self.assertEqual(
+            order.payment_url,
+            "https://cosmirror.payform.ru/?do=pay&signature=fresh",
+        )
