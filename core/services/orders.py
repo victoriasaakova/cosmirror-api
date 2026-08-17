@@ -35,8 +35,6 @@ _TERMINAL = {
     Order.Status.DENIED,
 }
 # Повторный клик «оплатить» через столько секунд выпускает новую ссылку Prodamus.
-# Раньше тот же Idempotency-Key возвращал короткую ссылку с payments_limit=1 —
-# после демо-оплаты Prodamus писал «лимит достигнут».
 _REISSUE_AFTER = timedelta(seconds=30)
 
 

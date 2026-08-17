@@ -197,6 +197,9 @@ def build_checkout_payload(
     action: str = "pay",
 ) -> dict[str, Any]:
     """Параметры персональной оплаты: товар, сумма, order_id, возврат на наш сайт."""
+    # Не кладём currency / callbackType / payments_limit в URL: Prodamus
+    # дублирует их в письме как «доп. параметры», и это уезжает покупателю.
+    # Рубли — дефолт формы; вебхук парсим и как form, и как JSON.
     payload: dict[str, Any] = {
         "do": action,
         "order_id": str(order_id),
@@ -209,9 +212,6 @@ def build_checkout_payload(
                 "type": "service",
             }
         ],
-        "currency": "rub",
-        "payments_limit": "1",
-        "callbackType": "json",
         "npd_income_type": "FROM_INDIVIDUAL",
     }
     if customer_email:
