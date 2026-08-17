@@ -16,6 +16,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from core.models import OnboardingSession, Order, WaitlistLead
+from core.services.frontend import public_frontend_base
 from core.services.prodamus import (
     ProdamusError,
     create_payment_link,
@@ -142,23 +143,21 @@ def _contacts(session: OnboardingSession) -> tuple[str, str, str]:
 
 
 def _public_frontend_base() -> str:
-    """Prodamus редиректит в браузере. http://localhost он часто поднимает до https://localhost — порт 443 закрыт."""
-    front = (getattr(settings, "FRONTEND_URL", "") or "").rstrip("/")
-    if front.startswith("https://"):
-        return front
-    return ""
+    """Куда вернуть браузер после Prodamus. https — прод; http localhost — локальный демо-возврат."""
+    return public_frontend_base(fallback="")
 
 
 def _success_url(order: Order) -> str:
+    """Только https: Prodamus поднимает http://localhost до https, и вкладка падает."""
     base = _public_frontend_base()
-    if not base:
+    if not base.startswith("https://"):
         return ""
-    return f"{base}/report/?order={order.public_id}"
+    return f"{base}/report/{order.public_id}/?from=prodamus"
 
 
 def _return_url(order: Order | None = None) -> str:
     base = _public_frontend_base()
-    if not base:
+    if not base.startswith("https://"):
         return ""
     if order is not None:
         return f"{base}/pay/failed/?order={order.public_id}"
@@ -168,14 +167,14 @@ def _return_url(order: Order | None = None) -> str:
 def _payment_url_is_stale(url: str) -> bool:
     if not url:
         return True
-    decoded = urllib.parse.unquote(url).lower()
-    if "localhost" in decoded or "127.0.0.1" in decoded:
-        return True
-    if "paylink=1" in decoded:
-        return True
     parsed = urllib.parse.urlparse(url)
     host = parsed.netloc.lower()
     path = parsed.path.strip("/")
+    decoded = urllib.parse.unquote(url).lower()
+    if "localhost" in host or host.startswith("127.0.0.1"):
+        return True
+    if "paylink=1" in decoded:
+        return True
     # Короткие https://payform.ru/xxxxx/ пропускают форму с промокодом.
     if host.endswith("payform.ru") and path and "do=pay" not in decoded:
         return True
@@ -191,7 +190,18 @@ def refresh_payment_link_if_stale(order: Order) -> Order:
 def _ensure_payment_link(order: Order, *, discount_value: Decimal | None = None) -> Order:
     sku, name, price = _product()
     name_stale = order.product_name != name
-    if order.payment_url and not _payment_url_is_stale(order.payment_url) and not name_stale:
+    success = _success_url(order)
+    missing_success = bool(
+        success
+        and order.payment_url
+        and "from=prodamus" not in urllib.parse.unquote(order.payment_url)
+    )
+    if (
+        order.payment_url
+        and not _payment_url_is_stale(order.payment_url)
+        and not name_stale
+        and not missing_success
+    ):
         return order
     if name_stale:
         order.product_name = name
@@ -329,7 +339,6 @@ def create_or_resume_order(
             return locked, created
         locked = _sync_order_contacts(locked, email=email, phone=phone, telegram=telegram)
         order = _ensure_payment_link(locked, discount_value=discount)
-    _send_demo_report_if_needed(order)
     return order, created
 
 
@@ -360,19 +369,32 @@ def _sync_order_contacts(order: Order, *, email: str, phone: str, telegram: str)
     return order
 
 
-def _send_demo_report_if_needed(order: Order) -> None:
+def complete_local_demo_order(order: Order) -> Order:
     """
-    В демо webhook с Prodamus на localhost не доходит.
-    После нажатия «оплатить» сразу шлём письмо с hello@cosmirror.ru.
+    Локальный демо-режим: webhook Prodamus на 127.0.0.1 не доходит.
+    Помечаем заказ оплаченным, чтобы на localhost открылся отчёт.
     """
-    if not getattr(settings, "PRODAMUS_DEMO_MODE", False):
-        return
-    from core.services.fulfillment import FulfillmentError, deliver_paid_order
+    if not getattr(settings, "DEBUG", False) and not getattr(settings, "PRODAMUS_DEMO_MODE", False):
+        raise OrderError("Демо-оплата доступна только локально.", 404)
+    from core.services.fulfillment import FulfillmentError, mark_paid_and_deliver
 
+    already_paid = order.status == Order.Status.PAID
+    already_sent = bool(order.fulfilled_at)
+    if already_paid and already_sent:
+        order.refresh_from_db()
+        return order
     try:
-        deliver_paid_order(order, allow_unpaid_demo=True)
+        # Если письмо ушло раньше оплаты (старый демо-баг) — при реальном
+        # переходе в paid отправим ещё раз.
+        mark_paid_and_deliver(order, force=already_sent and not already_paid)
     except FulfillmentError:
-        logger.exception("Demo report was not sent for %s", order.public_id)
+        logger.exception("Local demo report delivery failed for %s", order.public_id)
+        if order.status != Order.Status.PAID:
+            order.status = Order.Status.PAID
+            order.paid_at = order.paid_at or timezone.now()
+            order.save(update_fields=["status", "paid_at", "updated_at"])
+    order.refresh_from_db()
+    return order
 
 
 def apply_prodamus_webhook(payload: dict) -> Order | None:

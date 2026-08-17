@@ -1,5 +1,4 @@
 from typing import Optional
-import threading
 
 from django.conf import settings
 from django.http import HttpResponse
@@ -37,73 +36,57 @@ from .services.onboarding_astro import build_chart_and_insight
 from .services.orders import (
     OrderError,
     apply_prodamus_webhook,
+    complete_local_demo_order,
     create_or_resume_order,
     refresh_payment_link_if_stale,
     validate_idempotency_key,
 )
-from .services.personalize import is_personalized, personalize_insight
+from .services.personalize import (
+    insight_is_ready,
+    schedule_session_personalization,
+    should_schedule_personalization,
+)
 from .services.prodamus import extract_sign, is_configured, parse_webhook_payload, verify_webhook
 
 
-def _quiz_from_session(session: OnboardingSession) -> dict:
-    """Собрать ответы квиза со всех content-шагов (не waitlist)."""
-    quiz: dict = {}
-    answers = (
-        session.answers.select_related("step")
-        .exclude(step__step_type=OnboardingStep.StepType.WAITLIST)
-        .order_by("step__order", "-updated_at")
-    )
-    seen_slugs: set[str] = set()
-    for answer in answers:
-        slug = answer.step.slug
-        if slug in seen_slugs:
-            continue
-        seen_slugs.add(slug)
-        if not isinstance(answer.payload, dict):
-            continue
-        for key, value in answer.payload.items():
-            if value in (None, "", [], {}):
-                continue
-            quiz[key] = value
-    return quiz
-
-
-def _ensure_personalized_insight(
+def _kickoff_personalization(
     *,
     session: OnboardingSession,
-    natal: dict,
     insight: dict,
     chart: Optional[NatalChart] = None,
-) -> dict:
-    if is_personalized(insight):
-        return insight
-
-    personalized = personalize_insight(
-        insight=insight,
-        natal=natal,
-        quiz=_quiz_from_session(session),
-    )
-
-    if chart is not None and chart.chart_data is not None:
-        data = dict(chart.chart_data)
-        data["insight"] = personalized
-        chart.chart_data = data
-        chart.save(update_fields=["chart_data", "updated_at"])
-
-    return personalized
+) -> tuple[dict, bool]:
+    """Не блокируем HTTP на LLM: стартуем фон и отдаём то, что уже есть."""
+    if chart is not None:
+        chart.refresh_from_db()
+        stored = (chart.chart_data or {}).get("insight") if isinstance(chart.chart_data, dict) else None
+        if isinstance(stored, dict):
+            insight = stored
+        if should_schedule_personalization(insight):
+            schedule_session_personalization(
+                session_id=session.pk,
+                chart_id=chart.pk,
+                token=str(session.token),
+            )
+    return insight, insight_is_ready(insight)
 
 
-_insight_locks_guard = threading.Lock()
-_insight_locks: dict[str, threading.Lock] = {}
-
-
-def _insight_lock_for(token: str) -> threading.Lock:
-    with _insight_locks_guard:
-        lock = _insight_locks.get(token)
-        if lock is None:
-            lock = threading.Lock()
-            _insight_locks[token] = lock
-        return lock
+def _insight_payload(*, natal: dict, insight: dict, status_value: str, insight_ready: bool) -> dict:
+    return {
+        "status": status_value,
+        "insight_ready": insight_ready,
+        "has_birth_time": bool(natal.get("has_birth_time")),
+        "natal": {
+            "planets": natal.get("planets"),
+            "ascendant": natal.get("ascendant"),
+            "midheaven": natal.get("midheaven"),
+            "houses": natal.get("houses"),
+            "notes": natal.get("notes") or [],
+            "location": natal.get("location"),
+            "timezone": natal.get("timezone"),
+            "engine": natal.get("engine"),
+        },
+        "insight": insight,
+    }
 
 
 
@@ -314,8 +297,7 @@ class OnboardingInsightView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request, token):
-        with _insight_lock_for(str(token)):
-            return self._build_insight_response(token)
+        return self._build_insight_response(token)
 
     def _build_insight_response(self, token):
         session = get_object_or_404(OnboardingSession, token=token)
@@ -337,28 +319,18 @@ class OnboardingInsightView(APIView):
             insight = data.get("insight")
             if not insight:
                 insight = build_insight(data, calculate_sky_now())
-            insight = _ensure_personalized_insight(
+            insight, ready = _kickoff_personalization(
                 session=session,
-                natal=natal,
                 insight=insight,
                 chart=chart,
             )
             return Response(
-                {
-                    "status": chart.status,
-                    "has_birth_time": bool(data.get("has_birth_time")),
-                    "natal": {
-                        "planets": natal.get("planets"),
-                        "ascendant": natal.get("ascendant"),
-                        "midheaven": natal.get("midheaven"),
-                        "houses": natal.get("houses"),
-                        "notes": natal.get("notes") or [],
-                        "location": natal.get("location"),
-                        "timezone": natal.get("timezone"),
-                        "engine": natal.get("engine"),
-                    },
-                    "insight": insight,
-                }
+                _insight_payload(
+                    natal=natal,
+                    insight=insight,
+                    status_value=chart.status,
+                    insight_ready=ready,
+                )
             )
 
         if not session.birth_date:
@@ -382,29 +354,18 @@ class OnboardingInsightView(APIView):
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         natal = bundle["natal"]
-        insight = _ensure_personalized_insight(
+        insight, ready = _kickoff_personalization(
             session=session,
-            natal=natal,
             insight=bundle["insight"],
             chart=chart if chart and chart.status == NatalChart.Status.READY else None,
         )
-
         return Response(
-            {
-                "status": "ready",
-                "has_birth_time": bool(natal.get("has_birth_time")),
-                "natal": {
-                    "planets": natal.get("planets"),
-                    "ascendant": natal.get("ascendant"),
-                    "midheaven": natal.get("midheaven"),
-                    "houses": natal.get("houses"),
-                    "notes": natal.get("notes") or [],
-                    "location": natal.get("location"),
-                    "timezone": natal.get("timezone"),
-                    "engine": natal.get("engine"),
-                },
-                "insight": insight,
-            }
+            _insight_payload(
+                natal=natal,
+                insight=insight,
+                status_value="ready",
+                insight_ready=ready,
+            )
         )
 
 
@@ -506,6 +467,23 @@ class OrderEmailView(APIView):
         except FulfillmentError as exc:
             code = status.HTTP_409_CONFLICT if "оплат" in str(exc).lower() else status.HTTP_400_BAD_REQUEST
             return Response({"detail": str(exc)}, status=code)
+        return Response(OrderSerializer(order).data)
+
+
+class OrderDemoCompleteView(APIView):
+    """Только DEBUG / PRODAMUS_DEMO_MODE: пометить заказ оплаченным без webhook."""
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes: list = []
+
+    def post(self, request, public_id):
+        if not settings.DEBUG and not getattr(settings, "PRODAMUS_DEMO_MODE", False):
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        order = get_object_or_404(Order, public_id=public_id)
+        try:
+            order = complete_local_demo_order(order)
+        except OrderError as exc:
+            return Response({"detail": exc.detail}, status=exc.status)
         return Response(OrderSerializer(order).data)
 
 

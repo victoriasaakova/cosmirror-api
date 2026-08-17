@@ -129,7 +129,11 @@ class CheckoutLinkTests(TestCase):
                 "https://cosmirror.payform.ru/?do=pay&order_id=1&signature=abc"
             )
         )
-        self.assertTrue(_payment_url_is_stale("https://payform.ru/x/?urlSuccess=http://localhost:3000/"))
+        self.assertFalse(
+            _payment_url_is_stale(
+                "https://cosmirror.payform.ru/?do=pay&urlSuccess=http://localhost:3000/report/x/"
+            )
+        )
         self.assertTrue(_payment_url_is_stale("https://payform.ru/u8zDE/"))
         self.assertTrue(
             _payment_url_is_stale(
@@ -146,7 +150,17 @@ class LocalRedirectTests(TestCase):
 
         order = Order(public_id="00000000-0000-0000-0000-000000000001")
         self.assertEqual(_success_url(order), "")
-        self.assertEqual(_return_url(), "")
+        self.assertEqual(_return_url(order), "")
+
+    def test_report_email_link_stays_on_localhost(self):
+        from core.services.report import report_page_url
+        from core.models import Order
+
+        order = Order(public_id="00000000-0000-0000-0000-000000000001")
+        self.assertEqual(
+            report_page_url(order),
+            "http://localhost:3000/report/00000000-0000-0000-0000-000000000001/",
+        )
 
 
 @override_settings(
@@ -466,7 +480,8 @@ class PaidReportTests(TestCase):
     def test_success_and_fail_redirects(self):
         from core.services.orders import _return_url, _success_url
 
-        self.assertIn("/report/?order=", _success_url(self.order))
+        self.assertIn(f"/report/{self.order.public_id}/", _success_url(self.order))
+        self.assertIn("from=prodamus", _success_url(self.order))
         self.assertIn("/pay/failed/?order=", _return_url(self.order))
 
     def test_paid_report_pdf_and_email_fix(self):
@@ -477,8 +492,18 @@ class PaidReportTests(TestCase):
         detail = self.client.get(f"/api/orders/{self.order.public_id}/")
         self.assertEqual(detail.status_code, 200)
         report = detail.json()["report"]
-        self.assertIn("Солнце", report["sections"][1]["title"])
-        self.assertTrue(any(block["title"].startswith("1-й дом") for block in report["sections"][2]["blocks"]))
+        self.assertEqual(report["schema_version"], 2)
+        self.assertIn("document", report)
+        section_ids = [section["id"] for section in report["sections"]]
+        self.assertEqual(
+            section_ids,
+            ["person", "now", "natal", "periods", "request", "practice", "method"],
+        )
+        natal_section = next(section for section in report["sections"] if section["id"] == "natal")
+        self.assertTrue(any("Солнце" in block["title"] for block in natal_section["blocks"]))
+        self.assertTrue(any(block["title"].startswith("1-й дом") for block in natal_section["blocks"]))
+        self.assertEqual(report["document"]["generation"]["system_prompt_id"], "paid_report")
+        self.assertEqual(report["document"]["interpretive"]["status"], "pending_llm")
 
         pdf = self.client.get(f"/api/orders/{self.order.public_id}/report.pdf/")
         self.assertEqual(pdf.status_code, 200)
@@ -495,10 +520,32 @@ class PaidReportTests(TestCase):
         self.assertIsNotNone(self.order.fulfilled_at)
         self.assertEqual(mail.outbox[-1].to, ["right@example.com"])
         self.assertTrue(mail.outbox[-1].attachments)
+        html = mail.outbox[-1].alternatives[0][0]
+        self.assertIn("Привет, Вика", html)
+        self.assertIn("Открыть отчёт", html)
+        self.assertIn(f"/report/{self.order.public_id}/", html)
+        self.assertIn("на сайте Cosmirror", html)
+        self.assertIn(f'href="https://cosmirror.ru/report/{self.order.public_id}/"', html)
+        self.assertNotIn("Если это не та почта", html)
+        self.assertNotIn("укажи другой адрес", html)
 
     def test_pdf_forbidden_until_paid(self):
         response = self.client.get(f"/api/orders/{self.order.public_id}/report.pdf/")
         self.assertEqual(response.status_code, 403)
+
+    @override_settings(DEBUG=True, PRODAMUS_DEMO_MODE=True)
+    def test_demo_complete_marks_paid_after_checkout(self):
+        from django.core import mail
+
+        self.assertEqual(self.order.status, Order.Status.AWAITING_PAYMENT)
+        self.assertIsNone(self.order.fulfilled_at)
+        response = self.client.post(f"/api/orders/{self.order.public_id}/demo-complete/")
+        self.assertEqual(response.status_code, 200, response.content)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.PAID)
+        self.assertIsNotNone(self.order.fulfilled_at)
+        self.assertTrue(mail.outbox)
+        self.assertIn("Открыть отчёт", mail.outbox[-1].alternatives[0][0])
 
 
 class OnboardingEmailSourceTests(TestCase):
@@ -577,3 +624,125 @@ class OnboardingEmailSourceTests(TestCase):
             order.payment_url,
             "https://cosmirror.payform.ru/?do=pay&signature=fresh",
         )
+
+
+def _funnel_insight(**overrides):
+    cards = [
+        {"key": "natal", "label": "Натал", "before": "1", "after": "2"},
+        {"key": "cycles", "label": "Циклы", "before": "1", "after": "2"},
+        {"key": "tension", "label": "Напряжение", "before": "1", "after": "2"},
+        {"key": "focus", "label": "Фокус", "before": "1", "after": "2"},
+    ]
+    data = {
+        "funnel_version": 5,
+        "source": "polza",
+        "opening": {"bridge": "сейчас важно", "insight": "выйти из тесной роли"},
+        "body": "Первое предложение. Второе предложение про паттерн и выбор сейчас.",
+        "product_pitch": {
+            "title": "Стань ближе к своему истинному я через подробный разбор",
+            "text": "Разберём основу и космопортрет.\nСоединим запрос с текущими циклами.",
+        },
+        "outcomes": {"title": "Что ты поймёшь после разбора", "cards": cards},
+        "offer": {"title": "Стань ближе к своему истинному я через подробный разбор"},
+    }
+    data.update(overrides)
+    return data
+
+
+class InsightPersonalizeTests(TestCase):
+    def test_llm_first_pass_is_ready_without_editorial(self):
+        from core.services.personalize import insight_is_ready, is_personalized
+
+        insight = _funnel_insight()
+        self.assertTrue(is_personalized(insight))
+        self.assertTrue(insight_is_ready(insight))
+
+    @override_settings(POLZA_API_KEY="test-key", GROQ_API_KEY="")
+    def test_templates_are_not_ready_until_attempt_finishes(self):
+        from core.services.personalize import insight_is_ready, is_personalized
+
+        insight = _funnel_insight(source="templates")
+        self.assertFalse(is_personalized(insight))
+        self.assertFalse(insight_is_ready(insight))
+        insight["personalize_attempted"] = True
+        self.assertTrue(insight_is_ready(insight))
+
+    @override_settings(POLZA_API_KEY="test-key", GROQ_API_KEY="")
+    @patch("core.services.personalize.editorial.edit_user_facing_texts")
+    @patch("core.services.personalize.llm_client.chat_json")
+    def test_personalize_does_not_call_editorial(self, chat_json, edit):
+        from core.services.personalize import personalize_insight
+
+        chat_json.return_value = _funnel_insight()
+        result = personalize_insight(
+            insight={"influences": [], "cycles": [], "disclaimer": ""},
+            natal={"planets": {}, "has_birth_time": False},
+            quiz={},
+        )
+        edit.assert_not_called()
+        chat_json.assert_called_once()
+        self.assertTrue(result.get("editorial_passed"))
+        self.assertEqual(result.get("source"), "polza")
+
+
+class ReportBlueprintTests(TestCase):
+    def test_uranus_sun_conjunction_is_primary_and_prompt_exists(self):
+        from core.services.report_blueprint import build_report_document, load_paid_report_prompt
+        from core.services.report_facts import transits_now
+
+        natal = {
+            "engine": "swiss_ephemeris",
+            "has_birth_time": True,
+            "planets": {
+                "sun": {"sign": "leo", "sign_ru": "Лев", "sign_index": 4, "degree": 6.0, "house": 10},
+                "moon": {"sign": "capricorn", "sign_ru": "Козерог", "sign_index": 9, "degree": 12.0, "house": 4},
+                "venus": {"sign": "virgo", "sign_ru": "Дева", "sign_index": 5, "degree": 2.0, "house": 11},
+                "mars": {"sign": "gemini", "sign_ru": "Близнецы", "sign_index": 2, "degree": 8.0, "house": 8},
+                "pluto": {"sign": "scorpio", "sign_ru": "Скорпион", "sign_index": 7, "degree": 6.2, "house": 1},
+            },
+            "ascendant": {"sign": "scorpio", "sign_ru": "Скорпион", "sign_index": 7, "degree": 5.0},
+            "houses": [
+                {"house": i + 1, "sign": "scorpio", "sign_ru": "Скорпион"}
+                for i in range(12)
+            ],
+        }
+        sky = {
+            "datetime_utc": "2026-08-17T12:00:00Z",
+            "planets": {
+                "sun": {"sign": "leo", "sign_ru": "Лев", "sign_index": 4, "degree": 24.0, "speed": 0.97},
+                "uranus": {"sign": "leo", "sign_ru": "Лев", "sign_index": 4, "degree": 6.4, "speed": 0.014},
+                "neptune": {"sign": "aries", "sign_ru": "Овен", "sign_index": 0, "degree": 4.0, "speed": 0.006},
+                "pluto": {"sign": "aquarius", "sign_ru": "Водолей", "sign_index": 10, "degree": 4.8, "speed": 0.004},
+                "jupiter": {"sign": "cancer", "sign_ru": "Рак", "sign_index": 3, "degree": 12.0, "speed": 0.12},
+            },
+        }
+        hits = transits_now(natal, sky)
+        uranus_sun = next(hit for hit in hits if hit["id"] == "t_uranus_conjunction_sun")
+        self.assertLess(uranus_sun["orb"], 0.5)
+        self.assertEqual(uranus_sun["polarity"], "pressure")
+
+        document = build_report_document(
+            natal=natal,
+            sky_now=sky,
+            quiz={
+                "focus": ["path", "confidence"],
+                "life_stage": "many-spheres",
+                "intent": "life-stage",
+                "chart_knowledge": "sun-only",
+                "astrology_trigger": "understand-self",
+            },
+            person={"name": "Вика"},
+        )
+        primary = document["accents"]["primary"][0]
+        self.assertEqual(primary["transit"], "uranus")
+        self.assertEqual(primary["natal"], "sun")
+        self.assertEqual(document["accents"]["through_line"]["transit"], "uranus")
+        self.assertEqual(document["quiz"]["knowledge_depth"], "explain_all")
+        payload = document["generation"]["payload"]
+        self.assertEqual(payload["task"], "generate_paid_report")
+        self.assertTrue(payload["rules"]["no_predictions"])
+        self.assertIn("now", payload["output"]["sections"])
+        prompt = load_paid_report_prompt()
+        self.assertIn("сквозная линия", prompt.lower())
+        self.assertIn("Не пересчитывай небо", prompt)
+

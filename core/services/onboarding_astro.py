@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, time
 from typing import Any, Optional, Union
 
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 from core.models import NatalChart
 from core.services.geo import GeoLookupError, resolve_birth_geo
@@ -105,4 +108,18 @@ def calculate_and_store_chart(chart: NatalChart) -> NatalChart:
     chart.error_message = ""
     chart.calculated_at = timezone.now()
     chart.save()
+
+    # Натал готов за миллисекунды. LLM-тексты считаем в фоне, пока человек заполняет контакты.
+    try:
+        from core.services.personalize import schedule_session_personalization
+
+        if chart.session_id:
+            schedule_session_personalization(
+                session_id=chart.session_id,
+                chart_id=chart.pk,
+                token=str(chart.session.token),
+            )
+    except Exception:
+        logger.warning("Could not schedule insight personalization", exc_info=False)
+
     return chart

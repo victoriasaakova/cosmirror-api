@@ -42,6 +42,7 @@ def send_email(
     text: str,
     html: str,
     attachments: list[tuple[str, bytes, str]] | None = None,
+    inline_images: list[tuple[str, str, bytes, str]] | None = None,
 ) -> None:
     to = (to or "").strip()
     if not to:
@@ -59,9 +60,17 @@ def send_email(
             text=text,
             html=html,
             attachments=attachments,
+            inline_images=inline_images,
         )
         return
-    _send_django(to=to, subject=subject, text=text, html=html, attachments=attachments)
+    _send_django(
+        to=to,
+        subject=subject,
+        text=text,
+        html=html,
+        attachments=attachments,
+        inline_images=inline_images,
+    )
 
 
 def _send_resend(
@@ -72,6 +81,7 @@ def _send_resend(
     text: str,
     html: str,
     attachments: list[tuple[str, bytes, str]] | None = None,
+    inline_images: list[tuple[str, str, bytes, str]] | None = None,
 ) -> None:
     bcc = bcc_address()
     payload_data: dict = {
@@ -92,6 +102,19 @@ def _send_resend(
             }
             for name, content, mime in attachments
         ]
+    else:
+        payload_data["attachments"] = []
+    for cid, name, content, mime in inline_images or []:
+        payload_data["attachments"].append(
+            {
+                "filename": name,
+                "content": base64.b64encode(content).decode("ascii"),
+                "content_type": mime,
+                "content_id": cid,
+            }
+        )
+    if not payload_data["attachments"]:
+        del payload_data["attachments"]
     payload = json.dumps(payload_data).encode("utf-8")
     req = urllib.request.Request(
         "https://api.resend.com/emails",
@@ -121,7 +144,10 @@ def _send_django(
     text: str,
     html: str,
     attachments: list[tuple[str, bytes, str]] | None = None,
+    inline_images: list[tuple[str, str, bytes, str]] | None = None,
 ) -> None:
+    from email.mime.image import MIMEImage
+
     bcc = bcc_address()
     message = EmailMultiAlternatives(
         subject=subject,
@@ -132,6 +158,14 @@ def _send_django(
     )
     if html:
         message.attach_alternative(html, "text/html")
+    if inline_images:
+        message.mixed_subtype = "related"
+        for cid, name, content, mime in inline_images:
+            subtype = (mime.split("/")[-1] if "/" in mime else "png").lower()
+            image = MIMEImage(content, _subtype=subtype)
+            image.add_header("Content-ID", f"<{cid}>")
+            image.add_header("Content-Disposition", "inline", filename=name)
+            message.attach(image)
     for name, content, mime in attachments or []:
         message.attach(name, content, mime)
     sent = message.send(fail_silently=False)

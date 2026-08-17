@@ -52,6 +52,11 @@ urlpatterns = [
         name="order-email",
     ),
     path(
+        "orders/<uuid:public_id>/demo-complete/",
+        views.OrderDemoCompleteView.as_view(),
+        name="order-demo-complete",
+    ),
+    path(
         "payments/prodamus/webhook/",
         views.ProdamusWebhookView.as_view(),
         name="prodamus-webhook",

@@ -49,13 +49,13 @@ EDIT_TASK = """\
   до 90 символов. После «что» — если bridge с «что»; сразу после «сейчас важно» — без «что».
 - body — 2–3 коротких предложения, до ~280 символов; помещается на один экран; без названий знаков.
 - influences / cycles: key НЕ МЕНЯЙ; title и text можно переписать (про паттерн, не про знак).
-- product_pitch: ЧТО В ОТЧЁТЕ (не второй инсайт).
-  title держи: «Что ты получишь в подробном разборе».
-  text — РОВНО 2 короткие строки (разбор реакций/сценариев + ясность), до ~160 символов.
-  Без NASA/JPL/эфемерид и без «через неделю».
-- outcomes.cards: key ТОЧНО natal / cycles / crossings / focus — это блоки расчёта,
-  не мягкие выгоды («ясность», «выбор»). label/hint можно уточнить под фокус;
-  before/after служебные; after > before.
+- product_pitch: методика разбора (не второй инсайт).
+  title держи: «Стань ближе к своему истинному я через подробный разбор».
+  text — 2 абзаца: космопортрет при рождении + связь запроса с текущими циклами.
+  Без NASA/JPL и без «через неделю».
+- outcomes.cards: key ТОЧНО natal / cycles / tension / focus — что человек поймёт.
+  title держи: «Что ты поймёшь после разбора».
+  label/hint можно уточнить под фокус; before/after служебные; after > before.
 - offer.title оставь ТОЧНО «Стань ближе к своему истинному я через подробный разбор»;
   cta ТОЧНО «Получить за 777»; price ТОЧНО «777 ₽»; text можно оставить пустым.
 - Не добавляй новых ключей. Не удаляй существующие элементы списков.
@@ -118,7 +118,7 @@ def merge_edited_copy(insight: dict[str, Any], edited: dict[str, Any]) -> dict[s
         p_title = str(pitch.get("title") or base_pitch.get("title") or "").strip()
         p_text = str(pitch.get("text") or base_pitch.get("text") or "").strip()
         if p_title and p_text:
-            out["product_pitch"] = {"title": p_title[:90], "text": p_text[:360]}
+            out["product_pitch"] = {"title": p_title[:90], "text": p_text[:520]}
 
     outcomes = edited.get("outcomes")
     if isinstance(outcomes, dict):
@@ -147,7 +147,7 @@ def merge_edited_copy(insight: dict[str, Any], edited: dict[str, Any]) -> dict[s
                             "label": label[:40],
                             "before": before[:12],
                             "after": after[:12],
-                            "hint": hint[:80],
+                            "hint": hint[:180],
                         }
                     )
             if len(merged_cards) >= 4:

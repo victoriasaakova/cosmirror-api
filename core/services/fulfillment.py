@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import logging
+from pathlib import Path
 
 from django.conf import settings
 from django.utils import timezone
@@ -14,6 +15,14 @@ from core.services.pdf_report import render_report_pdf
 from core.services.report import build_paid_report, report_page_url
 
 logger = logging.getLogger(__name__)
+
+_EYE_CID = "cosmirror-eye"
+_EYE_PATH = Path(__file__).resolve().parent.parent / "assets" / "email_eye.png"
+_BODY_LEAD = (
+    "Твой персональный астрологический отчёт готов, ты можешь скачать PDF "
+    "из вложения или открыть интерактивную версию "
+)
+_BODY_LINK_LABEL = "на сайте Cosmirror"
 
 
 class FulfillmentError(Exception):
@@ -51,6 +60,7 @@ def deliver_paid_order(order: Order, *, force: bool = False, allow_unpaid_demo: 
             text=text,
             html=html_body,
             attachments=[("cosmirror-report.pdf", pdf, "application/pdf")],
+            inline_images=_inline_images(),
         )
     except MailerError as exc:
         order.fulfillment_error = str(exc)
@@ -86,52 +96,130 @@ def update_order_email_and_resend(order: Order, email: str) -> Order:
 
 
 def _customer_name(order: Order) -> str:
+    session = order.session
+    if session is not None:
+        from core.services.personalize import quiz_from_session
+
+        quiz_name = str(quiz_from_session(session).get("name") or "").strip()
+        if quiz_name:
+            return quiz_name
     lead = order.waitlist_lead
     if lead and (lead.name or "").strip():
         return lead.name.strip()
-    session = order.session
     if session and session.waitlist_lead and (session.waitlist_lead.name or "").strip():
         return session.waitlist_lead.name.strip()
     return ""
 
 
+def _greeting(name: str) -> str:
+    return f"Привет, {name}" if name else "Привет"
+
+
 def _plain_body(*, name: str, page_url: str) -> str:
-    hello = f"Привет, {name}." if name else "Привет."
     return "\n".join(
         [
-            hello,
+            _greeting(name),
             "",
-            "Персональный астрологический отчёт Cosmirror во вложении — PDF, его можно скачать и сохранить.",
-            "Тот же отчёт открыт на сайте:",
+            f"{_BODY_LEAD}{_BODY_LINK_LABEL}:",
             page_url,
             "",
-            "Если письмо пришло не на ту почту, открой ссылку и укажи другой адрес — отправим ещё раз.",
-            "",
-            "Cosmirror",
-            "https://cosmirror.ru",
+            "Открыть отчёт:",
+            page_url,
         ]
     )
 
 
+def _inline_images() -> list[tuple[str, str, bytes, str]]:
+    if not _EYE_PATH.is_file():
+        return []
+    return [(_EYE_CID, "email_eye.png", _EYE_PATH.read_bytes(), "image/png")]
+
+
 def _html_body(*, name: str, page_url: str) -> str:
-    hello = f"Привет, {html.escape(name)}." if name else "Привет."
-    url = html.escape(page_url)
+    hello = html.escape(_greeting(name))
+    url = html.escape(page_url, quote=True)
+    lead = html.escape(_BODY_LEAD)
+    link_label = html.escape(_BODY_LINK_LABEL)
+    navy = "#050d4a"
+    gold = "#F6E7A1"
+    ink = "#0a1a3a"
+    display = "'Playfair Display', Georgia, 'Times New Roman', serif"
+    grotesk = "Onest, Arial, Helvetica, sans-serif"
     return f"""<!DOCTYPE html>
-<html><body style="margin:0;background:#050d4a;color:#fff;font-family:Georgia,'Times New Roman',serif;">
-  <div style="max-width:560px;margin:0 auto;padding:40px 24px 48px;">
-    <p style="margin:0 0 28px;font-size:18px;letter-spacing:.04em;">Cosmirror</p>
-    <h1 style="margin:0 0 16px;font-size:26px;font-weight:400;line-height:1.3;">
-      Персональный астрологический отчёт
-    </h1>
-    <p style="margin:0 0 16px;line-height:1.6;">{hello}</p>
-    <p style="margin:0 0 16px;line-height:1.6;color:rgba(255,255,255,.82);">
-      PDF во вложении — его можно скачать. Тот же отчёт открыт на сайте.
-    </p>
-    <p style="margin:0 0 24px;">
-      <a href="{url}" style="color:#F6E7A1;">Открыть отчёт на Cosmirror</a>
-    </p>
-    <p style="margin:0;line-height:1.6;color:rgba(255,255,255,.55);font-size:14px;">
-      Если это не та почта, открой ссылку и укажи другой адрес — отправим ещё раз.
-    </p>
+<html lang="ru" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light only">
+  <meta name="supported-color-schemes" content="light">
+  <title>Cosmirror</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500&family=Playfair+Display:ital@1&display=swap" rel="stylesheet">
+  <style type="text/css">
+    :root {{ color-scheme: light only; }}
+    body, table, td, a {{ -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }}
+    body {{ margin: 0; padding: 0; background-color: {navy} !important; }}
+    .email-bg {{ background-color: {navy} !important; }}
+    .wordmark {{ font-family: {display}; font-style: italic; color: #ffffff !important; }}
+    .body-text {{ font-family: {grotesk}; color: #ffffff !important; }}
+    .muted {{ font-family: {grotesk}; color: #d8d4cc !important; }}
+    .site-link {{ color: {gold} !important; text-decoration: underline; font-family: {display}; font-style: italic; }}
+    .btn-cell {{ background-color: {gold} !important; }}
+    .btn-text {{ color: {ink} !important; text-decoration: none; }}
+    @media (prefers-color-scheme: dark) {{
+      body, .email-bg, .email-card {{ background-color: {navy} !important; }}
+      .wordmark, .body-text {{ color: #ffffff !important; }}
+      .muted {{ color: #d8d4cc !important; }}
+      .site-link {{ color: {gold} !important; }}
+      .btn-cell {{ background-color: {gold} !important; }}
+      .btn-text {{ color: {ink} !important; }}
+    }}
+  </style>
+</head>
+<body bgcolor="{navy}" style="margin:0;padding:0;background-color:{navy};">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">
+    Персональный астрологический отчёт Cosmirror готов
   </div>
-</body></html>"""
+  <table role="presentation" class="email-bg" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{navy}" style="background-color:{navy};">
+    <tr>
+      <td align="center" bgcolor="{navy}" class="email-bg" style="padding:48px 24px 56px;background-color:{navy};">
+        <table role="presentation" class="email-card" width="560" cellpadding="0" cellspacing="0" border="0" bgcolor="{navy}" style="max-width:560px;width:100%;background-color:{navy};">
+          <tr>
+            <td align="center" bgcolor="{navy}" style="padding:0 0 10px;background-color:{navy};">
+              <img src="cid:{_EYE_CID}" width="88" alt="" style="display:block;width:88px;height:auto;border:0;outline:none;">
+            </td>
+          </tr>
+          <tr>
+            <td align="center" bgcolor="{navy}" class="wordmark" style="padding:0 0 40px;background-color:{navy};font-family:{display};font-style:italic;font-size:28px;line-height:1.2;color:#ffffff;letter-spacing:-0.02em;">
+              Cosmirror
+            </td>
+          </tr>
+          <tr>
+            <td bgcolor="{navy}" class="body-text" style="padding:0 0 18px;background-color:{navy};font-family:{grotesk};font-size:18px;line-height:1.5;color:#ffffff;">
+              {hello}
+            </td>
+          </tr>
+          <tr>
+            <td bgcolor="{navy}" class="muted" style="padding:0 0 32px;background-color:{navy};font-family:{grotesk};font-size:16px;line-height:1.65;color:#d8d4cc;">
+              {lead}<a href="{url}" class="site-link" style="color:{gold};text-decoration:underline;font-family:{display};font-style:italic;">{link_label}</a>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" bgcolor="{navy}" style="padding:0;background-color:{navy};">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center">
+                <tr>
+                  <td align="center" bgcolor="{gold}" class="btn-cell" style="background-color:{gold};border-radius:999px;">
+                    <a href="{url}" class="btn-text" style="display:inline-block;padding:14px 40px;font-family:{grotesk};font-size:17px;font-weight:500;line-height:1;color:{ink};text-decoration:none;border-radius:999px;">
+                      Открыть отчёт
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""

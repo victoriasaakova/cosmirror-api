@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import threading
 from typing import Any, Optional
 
 from core.services import editorial, llm_client
@@ -56,10 +57,9 @@ SYSTEM_PROMPT = f"""\
 Задача: подготовить тексты онбординг-воронки после квиза (3 экрана + данные):
 1) первый экран разбора: opening + body — короткий психологический ПОРТРЕТ (один экран);
 2) переписать influences и cycles (кратко, лично, про поведение, не про знаки);
-3) экран product_pitch: ЧТО ФАКТИЧЕСКИ будет в подробном отчёте (пока продукта нет —
-   продаём информацию/разбор, который человек сможет использовать и на который опираться);
-4) offer + outcomes.cards: продающий оффер. outcomes.cards — 4 пункта СОДЕРЖИМОГО отчёта
-   (не «изменения за неделю»).
+3) экран product_pitch: обещание разбора (методика, не список выгод);
+4) offer + outcomes.cards: «Что ты поймёшь после разбора». outcomes.cards — 4 пункта
+   того, что человек поймёт (не «изменения за неделю»).
 
 Правила:
 - Язык: русский.
@@ -90,23 +90,20 @@ SYSTEM_PROMPT = f"""\
 Остальное:
 - influences/cycles: key НЕ МЕНЯЙ; title до 60 символов; text до ~200 символов.
   Title/text — про паттерн и опыт, не «Солнце в X».
-- product_pitch: ЧТО В ОТЧЁТЕ (не второй инсайт).
-  title ТОЧНО: «Что ты получишь в подробном разборе»
-  (фраза «подробном разборе» будет выделена курсивом на фронте).
-  text — РОВНО 2 короткие строки через \\n, суммарно до ~160 символов.
-  Тон: что человек получает (разбор реакций/сценариев) + ясность в выборе/отношениях.
-  ЗАПРЕЩЕНО: NASA, JPL, эфемериды, длинные методологические абзацы, «через неделю».
-  Пример:
-  «Персональный разбор реакций, потребностей и повторяющихся сценариев.\\nБольше ясности в выборе, отношениях и ежедневном ритме.»
-- outcomes: title «В полном разборе».
-  cards — РОВНО 4 пункта ФАКТИЧЕСКОГО содержимого (что посчитаем и отдадим),
-  НЕ мягкие выгоды вроде «ясность / опора / выбор».
-  key ТОЧНО по списку: natal, cycles, crossings, focus.
+- product_pitch: методика разбора (не второй инсайт и не список выгод).
+  title ТОЧНО: «Стань ближе к своему истинному я через подробный разбор»
+  (фраза «истинному я» будет выделена курсивом на фронте).
+  text — РОВНО 2 предложения через \\n, смысл держи:
+  «Разберём твой космопортрет: влияние планет, сильные конфигурации, напряжённые аспекты и слепые зоны.\\nСоединим с активными циклами, расскажем об их значениях и как с ними работать.»
+  ЗАПРЕЩЕНО: NASA, JPL, «через неделю», список выгод.
+- outcomes: title ТОЧНО «Что ты поймёшь после разбора».
+  cards — РОВНО 4 пункта того, что человек поймёт после разбора.
+  key ТОЧНО по списку: natal, cycles, tension, focus.
   label/hint можно чуть подстроить под фокус, но смысл блоков не меняй:
-  1) natal — полный расчёт натальной карты: как устроены планеты и как влияют;
-  2) cycles — текущие и ближайшие периоды;
-  3) crossings — пересечения циклов с картой пользователя;
-  4) focus — разбор сильных сторон и паттернов под запрос квиза.
+  1) natal — «Твоя натальная карта»: сильные стороны, потребности, противоречия, сценарии и связь с планетами;
+  2) cycles — «Твои текущие периоды»: транзиты на первом плане и как с ними работать;
+  3) tension — «Напряжение и ресурс»: компенсация напряжённых аспектов положительными, окна возможностей;
+  4) focus — «Разбор твоего запроса»: связь с темой квиза, рекомендации и вопросы для самостоятельной работы.
   before/after — служебные проценты; after > before.
 - offer: title ТОЧНО «Стань ближе к своему истинному я через подробный разбор»;
   text — пустая строка или 1 короткая (до 80 символов); детали на фронте списком блоков.
@@ -119,14 +116,14 @@ SYSTEM_PROMPT = f"""\
   "influences": [{{"key": "...", "title": "...", "text": "..."}}],
   "cycles": [{{"key": "...", "title": "...", "text": "..."}}],
   "product_pitch": {{
-    "title": "Что ты получишь в подробном разборе",
-    "text": "Персональный разбор реакций, потребностей и повторяющихся сценариев.\\nБольше ясности в выборе, отношениях и ежедневном ритме."
+    "title": "Стань ближе к своему истинному я через подробный разбор",
+    "text": "Разберём твой космопортрет: влияние планет, сильные конфигурации, напряжённые аспекты и слепые зоны.\\nСоединим с активными циклами, расскажем об их значениях и как с ними работать."
   }},
   "outcomes": {{
-    "title": "В полном разборе",
+    "title": "Что ты поймёшь после разбора",
     "cards": [
-      {{"key": "natal", "label": "Полный расчёт натальной карты", "before": "32%", "after": "81%", "hint": "как устроены твои планеты и как они влияют на реакции и выбор"}},
-      {{"key": "cycles", "label": "Текущие и ближайшие периоды", "before": "24%", "after": "76%", "hint": "что происходит сейчас и что подсвечивается в ближайшем периоде"}}
+      {{"key": "natal", "label": "Твоя натальная карта", "before": "32%", "after": "81%", "hint": "сильные стороны, потребности, противоречия, повторяющиеся сценарии и связь с положениями планет"}},
+      {{"key": "cycles", "label": "Твои текущие периоды", "before": "24%", "after": "76%", "hint": "значение и длительность транзитов, которые выходят на первый план, и как с ними работать"}}
     ]
   }},
   "offer": {{
@@ -174,7 +171,7 @@ def is_personalized(insight: Optional[dict[str, Any]]) -> bool:
     """
     Готовый инсайт: структура воронки v2 есть.
     Шаблоны не финал, если LLM настроен — перегенерируем.
-    Для LLM-источников дополнительно требуется editorial_passed.
+    Первый успешный LLM-проход считается финалом (editorial_passed).
     """
     if not _has_funnel_structure(insight):
         return False
@@ -185,7 +182,26 @@ def is_personalized(insight: Optional[dict[str, Any]]) -> bool:
         if llm_client.is_configured():
             return False
         return True
-    return bool((insight or {}).get("editorial_passed"))
+    return True
+
+
+def insight_is_ready(insight: Optional[dict[str, Any]]) -> bool:
+    """Можно отдавать на экран: персонализирован, шаблоны без LLM, или уже пробовали."""
+    if is_personalized(insight):
+        return True
+    if not llm_client.is_configured():
+        return True
+    return bool(isinstance(insight, dict) and insight.get("personalize_attempted"))
+
+
+def should_schedule_personalization(insight: Optional[dict[str, Any]]) -> bool:
+    if not llm_client.is_configured():
+        return False
+    if is_personalized(insight):
+        return False
+    if isinstance(insight, dict) and insight.get("personalize_attempted"):
+        return False
+    return True
 
 
 def personalize_insight(
@@ -198,7 +214,7 @@ def personalize_insight(
     Вернуть инсайт с offer.
     Если уже personalized — вернуть как есть.
     Если LLM недоступен / медленный — шаблоны + default offer.
-    LLM-тексты дополнительно проходят через editorial.py (Editorial Writing System).
+    Второй LLM-проход (editorial) не блокирует выдачу: первый промпт уже содержит правила.
     """
     if is_personalized(insight):
         return insight
@@ -208,11 +224,12 @@ def personalize_insight(
     offer = default_offer(quiz)
     templates = _with_templates(base_insight, offer, quiz, natal)
 
-    # Черновик уже есть (например после генерации без editorial) — только редактура.
+    # Старый кэш: LLM уже писал тексты, ждали editorial. Не гоняем второй вызов.
     if _has_funnel_structure(base_insight) and not base_insight.get("editorial_passed"):
         source = str(base_insight.get("source") or "")
         if source and source != "templates":
-            return _apply_editorial(base_insight, natal=natal, quiz=quiz)
+            base_insight["editorial_passed"] = True
+            return base_insight
 
     if not llm_client.is_configured():
         return templates
@@ -231,13 +248,14 @@ def personalize_insight(
             source=provider,
             require_llm_fields=True,
         )
-        return _apply_editorial(merged, natal=natal, quiz=quiz)
+        merged["editorial_passed"] = True
+        return merged
 
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
         future = pool.submit(_llm_path)
-        # Polza + editorial обычно 15–60с; gunicorn timeout=120.
-        return future.result(timeout=90)
+        # Один вызов Polza обычно 8–25с; не держим HTTP дольше этого.
+        return future.result(timeout=45)
     except concurrent.futures.TimeoutError:
         logger.warning("Insight personalization timed out; using templates")
         return templates
@@ -352,42 +370,42 @@ def default_body(quiz: dict[str, Any], influences: list[dict[str, Any]]) -> str:
 
 
 def default_outcomes(quiz: dict[str, Any]) -> dict[str, Any]:
-    """Факт. блоки полного разбора: то, что умеем посчитать и отдать."""
+    """Что человек поймёт после разбора: 4 фиксированных блока + тема квиза."""
     focus = quiz.get("focus") or []
     if isinstance(focus, str):
         focus = [focus]
     focus_keys = [str(f) for f in focus if f]
     focus_label = FOCUS_LABELS.get(focus_keys[0], "жизни") if focus_keys else "жизни"
     return {
-        "title": "В полном разборе",
+        "title": "Что ты поймёшь после разбора",
         "cards": [
             {
                 "key": "natal",
-                "label": "Полный расчёт натальной карты",
+                "label": "Твоя натальная карта",
                 "before": "32%",
                 "after": "81%",
-                "hint": "как устроены твои планеты и как они влияют на реакции, выбор и отношения с собой",
+                "hint": "Сильные стороны, потребности, противоречия, повторяющиеся сценарии и как это связано с положениями планет.",
             },
             {
                 "key": "cycles",
-                "label": "Текущие и ближайшие периоды",
+                "label": "Твои текущие периоды",
                 "before": "24%",
                 "after": "76%",
-                "hint": "что происходит сейчас и что подсвечивается в ближайшем периоде",
+                "hint": "Значение и длительность транзитов, которые выходят на первый план, и как с ними работать.",
             },
             {
-                "key": "crossings",
-                "label": "Пересечения циклов с твоей картой",
+                "key": "tension",
+                "label": "Напряжение и ресурс",
                 "before": "38%",
                 "after": "84%",
-                "hint": "где текущий фон цепляет твои личные темы прямо сейчас",
+                "hint": "Поймёшь, как компенсировать напряжённые аспекты положительными, увидишь открытые окна возможностей по циклам.",
             },
             {
                 "key": "focus",
-                "label": "Разбор под твой запрос",
+                "label": "Разбор твоего запроса",
                 "before": "29%",
                 "after": "79%",
-                "hint": f"сильные стороны и повторяющиеся реакции в теме «{focus_label}»",
+                "hint": f"Связь с твоим запросом «{focus_label}»: рекомендации и вопросы для самостоятельной работы.",
             },
         ],
     }
@@ -398,12 +416,13 @@ def default_product_pitch(
     quiz: dict[str, Any],
     natal: Optional[dict[str, Any]] = None,
 ) -> dict[str, str]:
-    title = "Что ты получишь в подробном разборе"
+    title = "Стань ближе к своему истинному я через подробный разбор"
     text = (
-        "Персональный разбор реакций, потребностей и повторяющихся сценариев.\n"
-        "Больше ясности в выборе, отношениях и ежедневном ритме."
+        "Разберём твой космопортрет: влияние планет, сильные конфигурации, "
+        "напряжённые аспекты и слепые зоны.\n"
+        "Соединим с активными циклами, расскажем об их значениях и как с ними работать."
     )
-    return {"title": title[:90], "text": text[:220]}
+    return {"title": title[:90], "text": text[:520]}
 
 
 def default_cycle_pitches(cycles: list[dict[str, Any]], quiz: dict[str, Any]) -> list[dict[str, str]]:
@@ -482,8 +501,8 @@ def _call_llm(
     }
     user = (
         "Перепиши блоки и собери оффер по этим данным.\n"
-        "Экран 1: opening + body. Экран 2: product_pitch (что в отчёте). "
-        "Экран 3: offer + outcomes.cards (4 пункта содержимого отчёта).\n\n"
+        "Экран 1: opening + body. Экран 2: product_pitch (методика разбора). "
+        "Экран 3: outcomes.cards (что поймёшь после разбора).\n\n"
         + json.dumps(payload, ensure_ascii=False)
     )
     return llm_client.chat_json(system=SYSTEM_PROMPT, user=user)
@@ -546,7 +565,7 @@ def _merge_llm_result(
         p_text = str(pitch_raw.get("text") or "").strip()
         if p_title and p_text:
             # Короткий pitch: не пускаем методологические простыни
-            out["product_pitch"] = {"title": p_title[:90], "text": p_text[:220]}
+            out["product_pitch"] = {"title": p_title[:90], "text": p_text[:520]}
     if not out.get("product_pitch"):
         if require_llm_fields:
             missing.append("product_pitch")
@@ -574,7 +593,7 @@ def _merge_llm_result(
                             "label": label[:40],
                             "before": before[:12],
                             "after": after[:12],
-                            "hint": hint[:80],
+                            "hint": hint[:180],
                         }
                     )
             if len(merged_cards) >= 4:
@@ -690,3 +709,94 @@ def _quiz_slice(quiz: dict[str, Any]) -> dict[str, Any]:
         or quiz.get("astrologyTrigger")
         or "",
     }
+
+
+_inflight_guard = threading.Lock()
+_inflight_tokens: set[str] = set()
+
+
+def quiz_from_session(session) -> dict[str, Any]:
+    """Собрать ответы квиза со всех content-шагов (не waitlist)."""
+    from core.models import OnboardingStep
+
+    quiz: dict[str, Any] = {}
+    answers = (
+        session.answers.select_related("step")
+        .exclude(step__step_type=OnboardingStep.StepType.WAITLIST)
+        .order_by("step__order", "-updated_at")
+    )
+    seen_slugs: set[str] = set()
+    for answer in answers:
+        slug = answer.step.slug
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+        if not isinstance(answer.payload, dict):
+            continue
+        for key, value in answer.payload.items():
+            if value in (None, "", [], {}):
+                continue
+            quiz[key] = value
+    return quiz
+
+
+def schedule_session_personalization(session_id: int, chart_id: int, token: str) -> None:
+    """Запустить LLM-разбор в фоне. Повторные вызовы с тем же token игнорируются."""
+    if not token or not llm_client.is_configured():
+        return
+    with _inflight_guard:
+        if token in _inflight_tokens:
+            return
+        _inflight_tokens.add(token)
+    thread = threading.Thread(
+        target=_run_session_personalization,
+        args=(session_id, chart_id, token),
+        daemon=True,
+        name=f"insight-{token[:8]}",
+    )
+    thread.start()
+
+
+def _run_session_personalization(session_id: int, chart_id: int, token: str) -> None:
+    from django.db import close_old_connections
+
+    from core.models import NatalChart, OnboardingSession
+
+    close_old_connections()
+    try:
+        session = OnboardingSession.objects.filter(pk=session_id).first()
+        chart = NatalChart.objects.filter(pk=chart_id).first()
+        if not session or not chart or not isinstance(chart.chart_data, dict):
+            return
+        data = dict(chart.chart_data)
+        insight = data.get("insight") if isinstance(data.get("insight"), dict) else {}
+        if not should_schedule_personalization(insight):
+            return
+        natal = {
+            "planets": data.get("planets"),
+            "ascendant": data.get("ascendant"),
+            "midheaven": data.get("midheaven"),
+            "houses": data.get("houses"),
+            "notes": data.get("notes") or [],
+            "location": data.get("location"),
+            "timezone": data.get("timezone"),
+            "engine": data.get("engine"),
+            "has_birth_time": bool(data.get("has_birth_time")),
+        }
+        personalized = personalize_insight(
+            insight=insight,
+            natal=natal,
+            quiz=quiz_from_session(session),
+        )
+        if not is_personalized(personalized):
+            personalized = copy.deepcopy(personalized)
+            personalized["personalize_attempted"] = True
+        data["insight"] = personalized
+        chart.chart_data = data
+        chart.save(update_fields=["chart_data", "updated_at"])
+    except Exception:
+        logger.warning("Background insight personalization failed", exc_info=True)
+    finally:
+        with _inflight_guard:
+            _inflight_tokens.discard(token)
+        close_old_connections()
