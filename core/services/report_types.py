@@ -11,34 +11,26 @@
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SYSTEM_PROMPT_ID = "paid_report"
 
-# --- Web tabs / PDF outline ----------------------------------------------
-
-SECTION_NOW = "now"
 SECTION_NATAL = "natal"
-SECTION_PERIODS = "periods"
+SECTION_CYCLES = "cycles"
 SECTION_REQUEST = "request"
-SECTION_PRACTICE = "practice"
-SECTION_METHOD = "method"
+SECTION_SUMMARY = "summary"
 
 WEB_TABS: list[dict[str, str]] = [
-    {"id": SECTION_NOW, "label": "Сейчас", "hint": "сквозная линия и пик периода"},
-    {"id": SECTION_NATAL, "label": "Натал", "hint": "планеты, дома, аспекты карты"},
-    {"id": SECTION_PERIODS, "label": "Периоды", "hint": "плюс, минус и окна"},
-    {"id": SECTION_REQUEST, "label": "Запрос", "hint": "то, что волнует сейчас"},
-    {"id": SECTION_PRACTICE, "label": "Практика", "hint": "вопросы и направления"},
-    {"id": SECTION_METHOD, "label": "Метод", "hint": "что именно посчитано"},
+    {"id": SECTION_NATAL, "label": "Твоя карта", "hint": "Солнце, Луна, Асцендент, дома и положения"},
+    {"id": SECTION_CYCLES, "label": "Аспекты и циклы", "hint": "напряжение, ресурс и как с ними работать"},
+    {"id": SECTION_REQUEST, "label": "Запрос", "hint": "как твой вопрос связан с текущими циклами"},
+    {"id": SECTION_SUMMARY, "label": "Саммари", "hint": "что идёт сейчас и что будет дальше"},
 ]
 
 PDF_OUTLINE: list[str] = [
-    SECTION_NOW,
     SECTION_NATAL,
-    SECTION_PERIODS,
+    SECTION_CYCLES,
     SECTION_REQUEST,
-    SECTION_PRACTICE,
-    SECTION_METHOD,
+    SECTION_SUMMARY,
 ]
 
 # --- Planets / points ----------------------------------------------------
@@ -57,6 +49,21 @@ PLANET_ORDER = (
 )
 
 ANGLE_ORDER = ("ascendant", "midheaven")
+
+PLANET_GLYPH = {
+    "sun": "☉",
+    "moon": "☽",
+    "mercury": "☿",
+    "venus": "♀",
+    "mars": "♂",
+    "jupiter": "♃",
+    "saturn": "♄",
+    "uranus": "♅",
+    "neptune": "♆",
+    "pluto": "♇",
+    "ascendant": "Asc",
+    "midheaven": "MC",
+}
 
 PLANET_RU = {
     "sun": "Солнце",

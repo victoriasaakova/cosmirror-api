@@ -178,6 +178,18 @@ def select_accents(
     natal_ranked = sorted(natal_aspects, key=lambda row: float(row.get("orb") or 99))[
         :PROMPT_NATAL_ASPECT_LIMIT
     ]
+    upcoming = [
+        row
+        for row in scored
+        if str(row.get("motion") or "") == "applying"
+    ]
+    upcoming.sort(
+        key=lambda row: (
+            row.get("days_to_exact") is None,
+            row.get("days_to_exact") or 0,
+            float(row.get("orb") or 99),
+        )
+    )
 
     return {
         "knowledge_depth": profile["knowledge_depth"],
@@ -186,6 +198,7 @@ def select_accents(
         "pressure": pressure,
         "resource": resource,
         "focus_matches": focus_matches,
+        "upcoming": upcoming[:6],
         "through_line": through_line(scored),
         "prompt_transits": scored[:PROMPT_TRANSIT_LIMIT],
         "natal_aspects": natal_ranked,

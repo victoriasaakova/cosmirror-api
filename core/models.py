@@ -31,6 +31,14 @@ class Profile(models.Model):
         "Долгота", max_digits=9, decimal_places=6, null=True, blank=True
     )
     timezone = models.CharField("Часовой пояс", max_length=64, blank=True, default="UTC")
+    yandex_id = models.CharField(
+        "Яндекс ID",
+        max_length=32,
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+    )
 
     registration_status = models.CharField(
         "Статус регистрации",
@@ -464,3 +472,44 @@ class Order(models.Model):
 
     def __str__(self) -> str:
         return f"{self.public_id} ({self.status})"
+
+
+class AuthToken(models.Model):
+    """Сессия входа после Яндекс ID. Ключ уходит на фронт как Bearer-токен."""
+
+    key = models.CharField(max_length=64, unique=True, db_index=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="auth_tokens",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Токен входа"
+        verbose_name_plural = "Токены входа"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.user_id} · {self.key[:8]}"
+
+
+class YandexOAuthState(models.Model):
+    """Одноразовый state + PKCE verifier на время редиректа в Яндекс."""
+
+    nonce = models.CharField(max_length=64, unique=True, db_index=True)
+    session = models.ForeignKey(
+        OnboardingSession,
+        on_delete=models.CASCADE,
+        related_name="yandex_oauth_states",
+    )
+    code_verifier = models.CharField(max_length=128)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "OAuth state Яндекса"
+        verbose_name_plural = "OAuth state Яндекса"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return self.nonce

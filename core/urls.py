@@ -5,6 +5,24 @@ from . import views
 urlpatterns = [
     path("health/", views.HealthView.as_view(), name="health"),
     path("me/", views.MeView.as_view(), name="me"),
+    path(
+        "auth/yandex/start/",
+        views.YandexAuthStartView.as_view(),
+        name="auth-yandex-start",
+    ),
+    path(
+        "auth/yandex/callback/",
+        views.YandexAuthCallbackView.as_view(),
+        name="auth-yandex-callback",
+    ),
+    path("me/report/", views.MeReportView.as_view(), name="me-report"),
+    path("me/report.pdf/", views.MeReportPdfView.as_view(), name="me-report-pdf"),
+    path("me/report/email/", views.MeReportEmailView.as_view(), name="me-report-email"),
+    path(
+        "me/report/demo-complete/",
+        views.MeReportDemoCompleteView.as_view(),
+        name="me-report-demo-complete",
+    ),
     path("waitlist/", views.WaitlistCreateView.as_view(), name="waitlist"),
     path("journal/", views.JournalEntryListCreateView.as_view(), name="journal"),
     # Онбординг
@@ -60,5 +78,11 @@ urlpatterns = [
         "payments/prodamus/webhook/",
         views.ProdamusWebhookView.as_view(),
         name="prodamus-webhook",
+    ),
+    # Без слэша: иначе APPEND_SLASH делает 301 POST→GET и webhook теряется.
+    path(
+        "payments/prodamus/webhook",
+        views.ProdamusWebhookView.as_view(),
+        name="prodamus-webhook-noslash",
     ),
 ]

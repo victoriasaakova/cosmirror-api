@@ -1,4 +1,3 @@
-from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -129,6 +128,8 @@ class OnboardingSessionSerializer(serializers.ModelSerializer):
     answers = OnboardingStepAnswerSerializer(many=True, read_only=True)
     next_step = serializers.SerializerMethodField()
     progress = serializers.SerializerMethodField()
+    authenticated = serializers.SerializerMethodField()
+    user_email = serializers.SerializerMethodField()
 
     class Meta:
         model = OnboardingSession
@@ -145,11 +146,21 @@ class OnboardingSessionSerializer(serializers.ModelSerializer):
             "answers",
             "next_step",
             "progress",
+            "authenticated",
+            "user_email",
             "created_at",
             "updated_at",
             "completed_at",
         )
         read_only_fields = fields
+
+    def get_authenticated(self, obj: OnboardingSession) -> bool:
+        return bool(obj.user_id)
+
+    def get_user_email(self, obj: OnboardingSession) -> str:
+        if obj.user_id and obj.user and obj.user.email:
+            return obj.user.email
+        return ""
 
     def get_next_step(self, obj: OnboardingSession):
         # Незавершённые ответы (completed=false) — ещё текущий шаг, не пропускаем.
@@ -198,20 +209,25 @@ class OnboardingStepSubmitSerializer(serializers.Serializer):
         elif step.step_type == OnboardingStep.StepType.WAITLIST:
             email = (payload.get("email") or "").strip()
             telegram = (payload.get("telegram") or "").strip()
-            if not telegram or not _is_valid_telegram(telegram):
+            if telegram and not _is_valid_telegram(telegram):
                 raise serializers.ValidationError(
                     {"payload": {"telegram": [_CONTACTS_SUPPORT]}}
                 )
-            if not email:
-                raise serializers.ValidationError(
-                    {"payload": {"email": [_CONTACTS_SUPPORT]}}
-                )
-            try:
-                validate_email(email)
-            except DjangoValidationError:
-                raise serializers.ValidationError(
-                    {"payload": {"email": [_CONTACTS_SUPPORT]}}
-                )
+            if completed:
+                if not telegram and payload.get("require_telegram"):
+                    raise serializers.ValidationError(
+                        {"payload": {"telegram": [_CONTACTS_SUPPORT]}}
+                    )
+                if not email:
+                    raise serializers.ValidationError(
+                        {"payload": {"email": [_CONTACTS_SUPPORT]}}
+                    )
+                try:
+                    validate_email(email)
+                except DjangoValidationError:
+                    raise serializers.ValidationError(
+                        {"payload": {"email": [_CONTACTS_SUPPORT]}}
+                    )
 
         answer, _ = OnboardingStepAnswer.objects.update_or_create(
             session=session,
@@ -330,6 +346,13 @@ class OnboardingStepSubmitSerializer(serializers.Serializer):
 
         session.waitlist_lead = lead
         self._session_extra_fields.append("waitlist_lead")
+        if session.user_id and telegram:
+            from core.models import Profile
+
+            account, _ = Profile.objects.get_or_create(user=session.user)
+            if account.telegram != telegram:
+                account.telegram = telegram
+                account.save(update_fields=["telegram", "updated_at"])
 
     def _maybe_complete_session(self, session: OnboardingSession) -> None:
         required = OnboardingStep.objects.filter(is_active=True, is_required=True)
@@ -409,7 +432,6 @@ class OrderSerializer(serializers.ModelSerializer):
             "currency",
             "payment_url",
             "paid_at",
-            "customer_email",
             "fulfilled_at",
             "fulfillment_error",
             "report",
@@ -422,14 +444,11 @@ class OrderSerializer(serializers.ModelSerializer):
     def get_report(self, order: Order):
         if order.status != Order.Status.PAID:
             return None
-        from core.services.report import build_paid_report
+        from core.services.report import public_paid_report
 
-        return build_paid_report(order)
+        return public_paid_report(order)
 
     def get_report_pdf_url(self, order: Order) -> str:
         if order.status != Order.Status.PAID:
             return ""
-        base = (getattr(settings, "PUBLIC_API_URL", "") or "").rstrip("/")
-        if not base or "127.0.0.1" in base or "localhost" in base:
-            base = "https://api.cosmirror.ru"
-        return f"{base}/api/orders/{order.public_id}/report.pdf/"
+        return "/api/me/report.pdf/"

@@ -130,8 +130,8 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.IsAuthenticated",
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        "core.authentication.BearerTokenAuthentication",
         "rest_framework.authentication.SessionAuthentication",
-        "rest_framework.authentication.BasicAuthentication",
     ],
 }
 
@@ -147,6 +147,13 @@ GROQ_MODEL = (os.getenv("GROQ_MODEL") or "qwen/qwen3.6-27b").strip()
 # Публичные URL (редиректы после оплаты + webhook для Prodamus)
 FRONTEND_URL = (os.getenv("FRONTEND_URL") or "http://localhost:3000").rstrip("/")
 PUBLIC_API_URL = (os.getenv("PUBLIC_API_URL") or "http://127.0.0.1:8000").rstrip("/")
+
+# Яндекс ID OAuth 2.0 — https://yandex.ru/dev/id/doc/ru/
+YANDEX_OAUTH_CLIENT_ID = (os.getenv("YANDEX_OAUTH_CLIENT_ID") or "").strip()
+YANDEX_OAUTH_CLIENT_SECRET = (os.getenv("YANDEX_OAUTH_CLIENT_SECRET") or "").strip()
+YANDEX_OAUTH_REDIRECT_URI = (
+    os.getenv("YANDEX_OAUTH_REDIRECT_URI") or f"{FRONTEND_URL}/onboarding/contacts/"
+).strip()
 
 # Товар по умолчанию. Имя попадает в чек (54-ФЗ, до 128 символов).
 COSMIRROR_PRODUCT_SKU = (os.getenv("COSMIRROR_PRODUCT_SKU") or "personal_report").strip()

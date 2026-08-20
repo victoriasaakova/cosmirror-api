@@ -233,6 +233,11 @@ def build_checkout_payload(
     sys_code = (getattr(settings, "PRODAMUS_SYS", "") or "").strip()
     if sys_code:
         payload["sys"] = sys_code
+    elif url_notification:
+        logger.warning(
+            "urlNotification задан без PRODAMUS_SYS — Prodamus может игнорировать webhook из ссылки. "
+            "Пропиши URL уведомлений в кабинете Payform."
+        )
     if getattr(settings, "PRODAMUS_DEMO_MODE", False):
         payload["demo_mode"] = "1"
         # В демо работает только карта РФ. СБП/рассрочка на тестовой форме часто ломают вкладку.
@@ -402,7 +407,16 @@ def our_order_id(payload: dict) -> str:
             value = source.get(key)
             if value:
                 return str(value).strip()
+        # Некоторые уведомления кладут наш UUID в order_id.
+        value = source.get("order_id")
+        if value and _looks_like_uuid(value):
+            return str(value).strip()
     return ""
+
+
+def _looks_like_uuid(value: Any) -> bool:
+    text = str(value or "").strip()
+    return len(text) == 36 and text.count("-") == 4
 
 
 def prodamus_order_id(payload: dict) -> str:

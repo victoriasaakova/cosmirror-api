@@ -1,8 +1,9 @@
 from datetime import date, time
 from decimal import Decimal
 from unittest.mock import patch
-from urllib.parse import unquote_plus
+from urllib.parse import unquote_plus, urlencode
 
+from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
@@ -18,11 +19,26 @@ from core.services.prodamus import (
     build_checkout_payload,
     create_payment_link,
     dump_for_signature,
+    flatten_php,
     sign,
     signed_checkout_url,
     verify,
     verify_webhook,
 )
+from core.services.yandex_oauth import issue_auth_token
+
+
+def _make_user(*, email="buyer@example.com", yandex_id="1000034426"):
+    user = User.objects.create_user(
+        username=f"yandex_{yandex_id}_{email.split('@')[0]}"[:150],
+        email=email,
+    )
+    user.set_unusable_password()
+    user.save()
+    user.profile.yandex_id = yandex_id
+    user.profile.save(update_fields=["yandex_id"])
+    token = issue_auth_token(user)
+    return user, token.key
 
 
 class ProdamusHmacTests(TestCase):
@@ -159,7 +175,7 @@ class LocalRedirectTests(TestCase):
         order = Order(public_id="00000000-0000-0000-0000-000000000001")
         self.assertEqual(
             report_page_url(order),
-            "http://localhost:3000/report/00000000-0000-0000-0000-000000000001/",
+            "http://localhost:3000/account/",
         )
 
 
@@ -178,31 +194,50 @@ class LocalRedirectTests(TestCase):
 class OrderApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.user, self.auth_key = _make_user()
         self.lead = WaitlistLead.objects.create(
             email="buyer@example.com",
             telegram="buyername",
             name="Вика",
             phone="+79990000000",
+            user=self.user,
         )
-        self.session = OnboardingSession.objects.create(waitlist_lead=self.lead)
+        self.session = OnboardingSession.objects.create(
+            waitlist_lead=self.lead,
+            user=self.user,
+        )
 
-    def _create(self, key="idem-key-0001", token=None, promo="", **kwargs):
+    def _create(self, key="idem-key-0001", token=None, promo="", auth_key=None, **kwargs):
         body = {"session_token": str(token or self.session.token)}
         if promo:
             body["promo_code"] = promo
+        headers = {
+            "HTTP_IDEMPOTENCY_KEY": key,
+            "HTTP_AUTHORIZATION": f"Bearer {auth_key or self.auth_key}",
+        }
+        headers.update(kwargs)
         return self.client.post(
             "/api/orders/",
             body,
             format="json",
-            HTTP_IDEMPOTENCY_KEY=key,
-            **kwargs,
+            **headers,
         )
+
+    def test_requires_auth(self):
+        response = self.client.post(
+            "/api/orders/",
+            {"session_token": str(self.session.token)},
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="no-auth-key-01",
+        )
+        self.assertEqual(response.status_code, 401)
 
     def test_requires_idempotency_key(self):
         response = self.client.post(
             "/api/orders/",
             {"session_token": str(self.session.token)},
             format="json",
+            HTTP_AUTHORIZATION=f"Bearer {self.auth_key}",
         )
         self.assertEqual(response.status_code, 400)
 
@@ -290,12 +325,18 @@ class OrderApiTests(TestCase):
 
     @patch("core.services.orders.create_payment_link", return_value="https://cosmirror.payform.ru/?do=pay&signature=x")
     def test_same_key_different_session_conflicts(self, _mocked):
+        other_user, other_key = _make_user(email="other@example.com", yandex_id="2002")
         other = OnboardingSession.objects.create(
-            waitlist_lead=WaitlistLead.objects.create(email="other@example.com")
+            waitlist_lead=WaitlistLead.objects.create(
+                email="other@example.com",
+                telegram="othername",
+                user=other_user,
+            ),
+            user=other_user,
         )
         first = self._create(key="shared-key-1")
         self.assertEqual(first.status_code, 201)
-        conflict = self._create(key="shared-key-1", token=other.token)
+        conflict = self._create(key="shared-key-1", token=other.token, auth_key=other_key)
         self.assertEqual(conflict.status_code, 409)
 
     @patch("core.services.orders.create_payment_link", return_value="https://cosmirror.payform.ru/?do=pay&signature=paid")
@@ -358,6 +399,7 @@ class ProdamusWebhookTests(TestCase):
             HTTP_SIGN=signature,
         )
         self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.content, b"success")
         self.order.refresh_from_db()
         self.assertEqual(self.order.status, Order.Status.PAID)
         self.assertEqual(self.order.prodamus_order_id, "300155")
@@ -371,6 +413,24 @@ class ProdamusWebhookTests(TestCase):
             HTTP_SIGN=signature,
         )
         self.assertEqual(again.status_code, 200)
+        self.assertEqual(again.content, b"success")
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.PAID)
+        mocked_deliver.assert_called_once()
+
+    @patch("core.services.fulfillment.deliver_paid_order")
+    def test_form_urlencoded_and_noslash_mark_paid(self, mocked_deliver):
+        payload = self._payload()
+        signature = sign(payload["submit"], "test-secret")
+        body = urlencode(flatten_php(payload), doseq=True)
+        response = self.client.post(
+            "/api/payments/prodamus/webhook",
+            body,
+            content_type="application/x-www-form-urlencoded",
+            HTTP_SIGN=signature,
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.content, b"success")
         self.order.refresh_from_db()
         self.assertEqual(self.order.status, Order.Status.PAID)
         mocked_deliver.assert_called_once()
@@ -406,11 +466,23 @@ class ProdamusWebhookTests(TestCase):
         self.order.refresh_from_db()
         self.assertEqual(self.order.status, Order.Status.AWAITING_PAYMENT)
 
-    def test_get_order(self):
+    def test_get_order_requires_owner(self):
         response = self.client.get(f"/api/orders/{self.order.public_id}/")
+        self.assertEqual(response.status_code, 401)
+
+        owner, key = _make_user(email="buyer@example.com", yandex_id="3003")
+        self.order.user = owner
+        self.order.session.user = owner
+        self.order.session.save(update_fields=["user"])
+        self.order.save(update_fields=["user"])
+        response = self.client.get(
+            f"/api/orders/{self.order.public_id}/",
+            HTTP_AUTHORIZATION=f"Bearer {key}",
+        )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id"], str(self.order.public_id))
         self.assertIsNone(response.json()["report"])
+        self.assertNotIn("customer_email", response.json())
 
 
 @override_settings(
@@ -422,9 +494,16 @@ class ProdamusWebhookTests(TestCase):
 class PaidReportTests(TestCase):
     def setUp(self):
         self.client = APIClient()
-        lead = WaitlistLead.objects.create(email="wrong@example.com", name="Вика")
+        self.user, self.auth_key = _make_user(email="wrong@example.com", yandex_id="4004")
+        lead = WaitlistLead.objects.create(
+            email="wrong@example.com",
+            name="Вика",
+            telegram="vikatelegram",
+            user=self.user,
+        )
         session = OnboardingSession.objects.create(
             waitlist_lead=lead,
+            user=self.user,
             birth_date=date(1993, 8, 21),
             birth_time=time(9, 45),
             birth_place="Москва",
@@ -470,6 +549,7 @@ class PaidReportTests(TestCase):
             idempotency_request_hash="b" * 64,
             session=session,
             waitlist_lead=lead,
+            user=self.user,
             customer_email="wrong@example.com",
             product_sku="personal_report",
             product_name="Персональный разбор Cosmirror",
@@ -477,42 +557,54 @@ class PaidReportTests(TestCase):
             status=Order.Status.AWAITING_PAYMENT,
         )
 
+    def _auth(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.auth_key}"}
+
     def test_success_and_fail_redirects(self):
         from core.services.orders import _return_url, _success_url
 
-        self.assertIn(f"/report/{self.order.public_id}/", _success_url(self.order))
+        self.assertIn("/account/", _success_url(self.order))
         self.assertIn("from=prodamus", _success_url(self.order))
-        self.assertIn("/pay/failed/?order=", _return_url(self.order))
+        self.assertNotIn(str(self.order.public_id), _success_url(self.order))
+        self.assertEqual(_return_url(self.order), "https://cosmirror.ru/pay/failed/")
 
     def test_paid_report_pdf_and_email_fix(self):
         from django.core import mail
 
         self.order.status = Order.Status.PAID
         self.order.save(update_fields=["status"])
-        detail = self.client.get(f"/api/orders/{self.order.public_id}/")
+        detail = self.client.get(f"/api/orders/{self.order.public_id}/", **self._auth())
         self.assertEqual(detail.status_code, 200)
         report = detail.json()["report"]
-        self.assertEqual(report["schema_version"], 2)
+        self.assertEqual(report["schema_version"], 3)
         self.assertIn("document", report)
+        self.assertNotIn("person", report)
+        self.assertNotIn("customer_email", detail.json())
+        self.assertNotIn("name", report["document"].get("quiz") or {})
+        self.assertNotIn("payload", report["document"].get("generation") or {})
         section_ids = [section["id"] for section in report["sections"]]
         self.assertEqual(
             section_ids,
-            ["person", "now", "natal", "periods", "request", "practice", "method"],
+            ["natal", "cycles", "request", "summary"],
         )
         natal_section = next(section for section in report["sections"] if section["id"] == "natal")
         self.assertTrue(any("Солнце" in block["title"] for block in natal_section["blocks"]))
         self.assertTrue(any(block["title"].startswith("1-й дом") for block in natal_section["blocks"]))
+        self.assertFalse(any(block["title"] == "Исходные данные" for block in natal_section["blocks"]))
+        self.assertTrue(report["document"]["factual"]["natal"].get("wheel", {}).get("planets"))
         self.assertEqual(report["document"]["generation"]["system_prompt_id"], "paid_report")
         self.assertEqual(report["document"]["interpretive"]["status"], "pending_llm")
 
-        pdf = self.client.get(f"/api/orders/{self.order.public_id}/report.pdf/")
+        pdf = self.client.get(f"/api/orders/{self.order.public_id}/report.pdf/", **self._auth())
         self.assertEqual(pdf.status_code, 200)
         self.assertTrue(pdf.content.startswith(b"%PDF"))
+        self.assertNotIn(b"1993", pdf.content)
 
         response = self.client.post(
             f"/api/orders/{self.order.public_id}/email/",
             {"email": "right@example.com"},
             format="json",
+            **self._auth(),
         )
         self.assertEqual(response.status_code, 200, response.content)
         self.order.refresh_from_db()
@@ -523,14 +615,18 @@ class PaidReportTests(TestCase):
         html = mail.outbox[-1].alternatives[0][0]
         self.assertIn("Привет, Вика", html)
         self.assertIn("Открыть отчёт", html)
-        self.assertIn(f"/report/{self.order.public_id}/", html)
+        self.assertIn("/account/", html)
         self.assertIn("на сайте Cosmirror", html)
-        self.assertIn(f'href="https://cosmirror.ru/report/{self.order.public_id}/"', html)
+        self.assertIn('href="https://cosmirror.ru/account/"', html)
+        self.assertNotIn(str(self.order.public_id), html)
         self.assertNotIn("Если это не та почта", html)
         self.assertNotIn("укажи другой адрес", html)
 
     def test_pdf_forbidden_until_paid(self):
-        response = self.client.get(f"/api/orders/{self.order.public_id}/report.pdf/")
+        response = self.client.get(
+            f"/api/orders/{self.order.public_id}/report.pdf/",
+            **self._auth(),
+        )
         self.assertEqual(response.status_code, 403)
 
     @override_settings(DEBUG=True, PRODAMUS_DEMO_MODE=True)
@@ -539,7 +635,10 @@ class PaidReportTests(TestCase):
 
         self.assertEqual(self.order.status, Order.Status.AWAITING_PAYMENT)
         self.assertIsNone(self.order.fulfilled_at)
-        response = self.client.post(f"/api/orders/{self.order.public_id}/demo-complete/")
+        response = self.client.post(
+            f"/api/orders/{self.order.public_id}/demo-complete/",
+            **self._auth(),
+        )
         self.assertEqual(response.status_code, 200, response.content)
         self.order.refresh_from_db()
         self.assertEqual(self.order.status, Order.Status.PAID)
@@ -585,6 +684,9 @@ class OnboardingEmailSourceTests(TestCase):
 
         lead = WaitlistLead.objects.create(email="old@icloud.com", telegram="victoriss")
         session = OnboardingSession.objects.create(waitlist_lead=lead)
+        user, auth_key = _make_user(email="saakovka@gmail.com", yandex_id="5005")
+        session.user = user
+        session.save(update_fields=["user"])
         step = OnboardingStep.objects.create(
             slug="contacts",
             title="Контакты",
@@ -602,6 +704,7 @@ class OnboardingEmailSourceTests(TestCase):
             idempotency_request_hash=_request_hash(str(session.token), "personal_report", ""),
             session=session,
             waitlist_lead=lead,
+            user=user,
             customer_email="old@icloud.com",
             product_sku="personal_report",
             product_name="Персональный разбор Cosmirror",
@@ -615,6 +718,7 @@ class OnboardingEmailSourceTests(TestCase):
             {"session_token": str(session.token)},
             format="json",
             HTTP_IDEMPOTENCY_KEY="email-sync-key-01",
+            HTTP_AUTHORIZATION=f"Bearer {auth_key}",
         )
         self.assertEqual(response.status_code, 200, response.content)
         order.refresh_from_db()
@@ -741,8 +845,100 @@ class ReportBlueprintTests(TestCase):
         payload = document["generation"]["payload"]
         self.assertEqual(payload["task"], "generate_paid_report")
         self.assertTrue(payload["rules"]["no_predictions"])
-        self.assertIn("now", payload["output"]["sections"])
+        self.assertIn("cycles", payload["output"]["sections"])
+        self.assertIn("summary", payload["output"]["sections"])
+        self.assertTrue(document["factual"]["natal"]["wheel"]["planets"])
         prompt = load_paid_report_prompt()
         self.assertIn("сквозная линия", prompt.lower())
         self.assertIn("Не пересчитывай небо", prompt)
+
+
+class SwissPlacidusTests(TestCase):
+    def test_placidus_returns_twelve_cusps(self):
+        from datetime import date, time
+
+        from core.services.swiss_engine import calculate_natal
+
+        natal = calculate_natal(
+            birth_date=date(1995, 5, 26),
+            birth_time=time(19, 25),
+            latitude=54.516498,
+            longitude=18.540274,
+            timezone_name="Europe/Warsaw",
+            place="Gdynia",
+        )
+        self.assertEqual(natal["house_system"], "placidus")
+        self.assertEqual(len(natal["houses"]), 12)
+        self.assertAlmostEqual(natal["houses"][0]["cusp_longitude"], natal["ascendant"]["longitude"], places=2)
+        self.assertIn(natal["planets"]["sun"]["house"], range(1, 13))
+
+
+@override_settings(
+    YANDEX_OAUTH_CLIENT_ID="test-client",
+    YANDEX_OAUTH_CLIENT_SECRET="test-secret",
+    YANDEX_OAUTH_REDIRECT_URI="http://localhost:3000/onboarding/contacts/",
+)
+class YandexAuthTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.session = OnboardingSession.objects.create()
+        OnboardingStep.objects.create(
+            slug="contacts",
+            title="Контакты",
+            step_type=OnboardingStep.StepType.WAITLIST,
+            order=1,
+        )
+
+    def test_start_returns_authorize_url(self):
+        response = self.client.get(
+            "/api/auth/yandex/start/",
+            {"session_token": str(self.session.token)},
+        )
+        self.assertEqual(response.status_code, 200)
+        url = response.json()["url"]
+        self.assertIn("oauth.yandex.ru/authorize", url)
+        self.assertIn("client_id=test-client", url)
+        self.assertIn("code_challenge", url)
+        self.assertIn("login%3Aemail", url.replace("+", "%20"))
+
+    @patch("core.services.yandex_oauth._get_json")
+    @patch("core.services.yandex_oauth._post_form")
+    def test_callback_creates_user_and_attaches_session(self, post_form, get_json):
+        from core.models import YandexOAuthState
+
+        YandexOAuthState.objects.create(
+            nonce="state-1",
+            session=self.session,
+            code_verifier="verifier",
+        )
+        post_form.return_value = {"access_token": "ya-token"}
+        get_json.return_value = {
+            "id": "42",
+            "login": "ivan",
+            "default_email": "ivan@yandex.ru",
+            "first_name": "Иван",
+            "last_name": "Иванов",
+            "display_name": "Иван",
+        }
+        response = self.client.post(
+            "/api/auth/yandex/callback/",
+            {"code": "1234567", "state": "state-1"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        data = response.json()
+        self.assertTrue(data["token"])
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.user.email, "ivan@yandex.ru")
+        self.assertEqual(self.session.user.profile.yandex_id, "42")
+        self.assertEqual(self.session.waitlist_lead.email, "ivan@yandex.ru")
+        me = self.client.get("/api/me/", HTTP_AUTHORIZATION=f"Bearer {data['token']}")
+        self.assertEqual(me.status_code, 200)
+        self.assertEqual(me.json()["email"], "ivan@yandex.ru")
+        report = self.client.get(
+            "/api/me/report/",
+            HTTP_AUTHORIZATION=f"Bearer {data['token']}",
+        )
+        self.assertEqual(report.status_code, 404)
+
 

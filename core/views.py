@@ -1,12 +1,17 @@
+import logging
 from typing import Optional
 
 from django.conf import settings
+from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+logger = logging.getLogger(__name__)
+
+from .authentication import BearerTokenAuthentication
 from .models import (
     GlobalPlanetaryCycle,
     JournalEntry,
@@ -47,6 +52,12 @@ from .services.personalize import (
     should_schedule_personalization,
 )
 from .services.prodamus import extract_sign, is_configured, parse_webhook_payload, verify_webhook
+from .services.yandex_oauth import (
+    YandexOAuthError,
+    build_authorize_url,
+    complete_yandex_login,
+    exchange_code,
+)
 
 
 def _kickoff_personalization(
@@ -99,9 +110,67 @@ class HealthView(APIView):
 
 class MeView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
 
     def get(self, request):
         return Response(UserSerializer(request.user).data)
+
+
+class YandexAuthStartView(APIView):
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = [BearerTokenAuthentication]
+
+    def get(self, request):
+        token = (request.query_params.get("session_token") or "").strip()
+        if not token:
+            return Response({"detail": "session_token обязателен."}, status=status.HTTP_400_BAD_REQUEST)
+        session = get_object_or_404(OnboardingSession, token=token)
+        try:
+            url = build_authorize_url(session=session)
+        except YandexOAuthError as exc:
+            return Response({"detail": exc.detail}, status=exc.status)
+        return Response({"url": url, "redirect_uri": getattr(settings, "YANDEX_OAUTH_REDIRECT_URI", "")})
+
+
+class YandexAuthCallbackView(APIView):
+    permission_classes = [permissions.AllowAny]
+    authentication_classes: list = []
+
+    def post(self, request):
+        try:
+            session, profile = exchange_code(
+                code=str(request.data.get("code") or ""),
+                state=str(request.data.get("state") or ""),
+            )
+            user, auth_token = complete_yandex_login(session=session, profile=profile)
+        except YandexOAuthError as exc:
+            return Response({"detail": exc.detail}, status=exc.status)
+        return Response(
+            {
+                "token": auth_token.key,
+                "session_token": str(session.token),
+                "user": UserSerializer(user).data,
+            }
+        )
+
+
+def _orders_for_user(user):
+    return Order.objects.filter(Q(user=user) | Q(session__user=user))
+
+
+def _latest_order_for(user) -> Optional[Order]:
+    qs = _orders_for_user(user)
+    paid = qs.filter(status=Order.Status.PAID).order_by("-paid_at", "-created_at").first()
+    return paid or qs.order_by("-created_at").first()
+
+
+def _owned_order_or_404(user, public_id) -> Order:
+    order = _orders_for_user(user).filter(public_id=public_id).first()
+    if order is None:
+        from django.http import Http404
+
+        raise Http404()
+    return order
 
 
 class WaitlistCreateView(generics.CreateAPIView):
@@ -162,6 +231,7 @@ class OnboardingSessionCreateView(APIView):
     """Создать новую сессию онбординга (до регистрации)."""
 
     permission_classes = [permissions.AllowAny]
+    authentication_classes = [BearerTokenAuthentication]
 
     def post(self, request):
         session = OnboardingSession.objects.create()
@@ -387,8 +457,8 @@ class OrderCreateView(APIView):
     и тем же телом возвращает тот же заказ, без второго платежа.
     """
 
-    permission_classes = [permissions.AllowAny]
-    authentication_classes: list = []
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
 
     def post(self, request):
         try:
@@ -403,6 +473,14 @@ class OrderCreateView(APIView):
         if not token:
             return Response({"detail": "session_token обязателен."}, status=status.HTTP_400_BAD_REQUEST)
         session = get_object_or_404(OnboardingSession, token=token)
+        if session.user_id and session.user_id != request.user.id:
+            return Response(
+                {"detail": "Сессия принадлежит другому аккаунту."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if not session.user_id:
+            session.user = request.user
+            session.save(update_fields=["user", "updated_at"])
 
         try:
             order, created = create_or_resume_order(
@@ -420,11 +498,26 @@ class OrderCreateView(APIView):
 
 
 class OrderDetailView(APIView):
-    permission_classes = [permissions.AllowAny]
-    authentication_classes: list = []
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
 
     def get(self, request, public_id):
-        order = get_object_or_404(Order, public_id=public_id)
+        order = _owned_order_or_404(request.user, public_id)
+        try:
+            order = refresh_payment_link_if_stale(order)
+        except OrderError:
+            pass
+        return Response(OrderSerializer(order).data)
+
+
+class MeReportView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
+
+    def get(self, request):
+        order = _latest_order_for(request.user)
+        if order is None:
+            return Response({"detail": "Нет заказа."}, status=status.HTTP_404_NOT_FOUND)
         try:
             order = refresh_payment_link_if_stale(order)
         except OrderError:
@@ -433,58 +526,87 @@ class OrderDetailView(APIView):
 
 
 class OrderReportPdfView(APIView):
-    permission_classes = [permissions.AllowAny]
-    authentication_classes: list = []
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
 
-    def get(self, request, public_id):
-        order = get_object_or_404(Order, public_id=public_id)
-        if order.status != Order.Status.PAID:
+    def get(self, request, public_id=None):
+        order = (
+            _owned_order_or_404(request.user, public_id)
+            if public_id
+            else _latest_order_for(request.user)
+        )
+        if order is None or order.status != Order.Status.PAID:
             return Response({"detail": "Отчёт будет после оплаты."}, status=status.HTTP_403_FORBIDDEN)
         from core.services.pdf_report import render_report_pdf
-        from core.services.report import build_paid_report
+        from core.services.report import public_paid_report
 
-        pdf = render_report_pdf(build_paid_report(order))
+        pdf = render_report_pdf(public_paid_report(order))
         response = HttpResponse(pdf, content_type="application/pdf")
         response["Content-Disposition"] = 'attachment; filename="cosmirror-report.pdf"'
         return response
 
 
+class MeReportPdfView(OrderReportPdfView):
+    def get(self, request, public_id=None):
+        return super().get(request, public_id=None)
+
+
 class OrderEmailView(APIView):
     """Поменять почту после оплаты и отправить PDF ещё раз."""
 
-    permission_classes = [permissions.AllowAny]
-    authentication_classes: list = []
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
 
-    def post(self, request, public_id):
-        order = get_object_or_404(Order, public_id=public_id)
+    def post(self, request, public_id=None):
+        order = (
+            _owned_order_or_404(request.user, public_id)
+            if public_id
+            else _latest_order_for(request.user)
+        )
+        if order is None:
+            return Response({"detail": "Нет заказа."}, status=status.HTTP_404_NOT_FOUND)
         from core.services.fulfillment import FulfillmentError, update_order_email_and_resend
 
+        email = str(request.data.get("email") or request.user.email or "")
         try:
-            order = update_order_email_and_resend(
-                order,
-                str(request.data.get("email") or ""),
-            )
+            order = update_order_email_and_resend(order, email)
         except FulfillmentError as exc:
             code = status.HTTP_409_CONFLICT if "оплат" in str(exc).lower() else status.HTTP_400_BAD_REQUEST
             return Response({"detail": str(exc)}, status=code)
         return Response(OrderSerializer(order).data)
 
 
+class MeReportEmailView(OrderEmailView):
+    def post(self, request, public_id=None):
+        return super().post(request, public_id=None)
+
+
 class OrderDemoCompleteView(APIView):
     """Только DEBUG / PRODAMUS_DEMO_MODE: пометить заказ оплаченным без webhook."""
 
-    permission_classes = [permissions.AllowAny]
-    authentication_classes: list = []
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
 
-    def post(self, request, public_id):
+    def post(self, request, public_id=None):
         if not settings.DEBUG and not getattr(settings, "PRODAMUS_DEMO_MODE", False):
             return Response(status=status.HTTP_404_NOT_FOUND)
-        order = get_object_or_404(Order, public_id=public_id)
+        order = (
+            _owned_order_or_404(request.user, public_id)
+            if public_id
+            else _latest_order_for(request.user)
+        )
+        if order is None:
+            return Response({"detail": "Нет заказа."}, status=status.HTTP_404_NOT_FOUND)
         try:
             order = complete_local_demo_order(order)
         except OrderError as exc:
             return Response({"detail": exc.detail}, status=exc.status)
         return Response(OrderSerializer(order).data)
+
+
+class MeReportDemoCompleteView(OrderDemoCompleteView):
+    def post(self, request, public_id=None):
+        return super().post(request, public_id=None)
 
 
 class ProdamusWebhookView(APIView):
@@ -511,17 +633,24 @@ class ProdamusWebhookView(APIView):
             except Exception:
                 payload = {}
         if not payload:
+            logger.warning("Prodamus webhook empty body content_type=%s", request.content_type)
             return Response({"detail": "Пустое тело уведомления."}, status=status.HTTP_400_BAD_REQUEST)
 
         secret = settings.PRODAMUS_SECRET_KEY
         allow_demo = bool(settings.PRODAMUS_DEMO_MODE)
         if not verify_webhook(payload, secret, signature, allow_demo=allow_demo):
+            logger.warning(
+                "Prodamus webhook bad signature keys=%s",
+                sorted(str(k) for k in payload.keys())[:24],
+            )
             return Response({"detail": "Неверная подпись."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             order = apply_prodamus_webhook(payload)
         except OrderError as exc:
+            logger.warning("Prodamus webhook rejected: %s", exc.detail)
             return Response({"detail": exc.detail}, status=exc.status)
 
-        return Response({"status": "ok", "order_id": str(order.public_id), "order_status": order.status})
+        # Prodamus ждёт HTTP 200 и тело success, иначе шлёт уведомление повторно.
+        return HttpResponse("success")
 

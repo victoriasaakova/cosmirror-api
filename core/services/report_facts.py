@@ -11,19 +11,21 @@ from datetime import datetime, timedelta
 from math import copysign
 from typing import Any, Optional
 
-from core.services.natal_common import SIGNS_RU
+from core.services.natal_common import SIGNS, SIGNS_RU
 from core.services.report_lexicon import (
     ASPECT_THEME,
     HOUSE_THEME,
     PLANET_THEME,
     SIGN_THEME,
     aspect_sentence,
+    cycle_copy,
     placement_sentence,
 )
 from core.services.report_types import (
     ANGLE_ORDER,
     ASPECTS,
     NATAL_ORB,
+    PLANET_GLYPH,
     PLANET_ORDER,
     PLANET_RU,
     POLARITY_MIXED,
@@ -126,7 +128,10 @@ def natal_table(natal: dict[str, Any]) -> list[dict[str, Any]]:
                 "retrograde": bool(block.get("retrograde")),
                 "theme": PLANET_THEME.get(key, ""),
                 "sign_theme": SIGN_THEME.get(sign, ""),
-                "fact": placement_sentence(key, sign_ru, int(house) if house else None),
+                "fact": placement_sentence(
+                    key, sign_ru, int(house) if house else None, sign=sign
+                ),
+                "glyph": PLANET_GLYPH.get(key, ""),
             }
         )
     return rows
@@ -217,6 +222,7 @@ def transits_now(natal: dict[str, Any], sky: dict[str, Any]) -> list[dict[str, A
                     "scope": "personal",
                     "weight_hint": TRANSIT_PLANET_WEIGHT.get(t_key, 0.3),
                     "fact": aspect_sentence(t_key, str(hit["ru"]), n_key, str(hit["key"])),
+                    **cycle_copy(t_key, polarity),
                 }
             )
     hits.sort(key=lambda row: (row["orb"], -float(row["weight_hint"])))
@@ -273,14 +279,73 @@ def houses_table(natal: dict[str, Any]) -> list[dict[str, Any]]:
                 "sign_ru": row.get("sign_ru") or SIGNS_RU.get(sign, ""),
                 "theme": HOUSE_THEME.get(number, ""),
                 "occupants": occupants.get(number) or [],
+                "cusp_longitude": row.get("cusp_longitude"),
             }
         )
     return out
 
 
+def chart_wheel(natal: dict[str, Any], aspects: list[dict[str, Any]]) -> dict[str, Any]:
+    """Данные для круглой карты: ASC слева, как в классической космограмме GeoCult."""
+    points = natal_points(natal)
+    asc = points.get("ascendant")
+    mc = points.get("midheaven")
+    asc_lon = float(asc["longitude"]) if asc else 0.0
+    planets = []
+    for key in PLANET_ORDER:
+        block = points.get(key)
+        if not block:
+            continue
+        planets.append(
+            {
+                "key": key,
+                "name": PLANET_RU.get(key, key),
+                "glyph": PLANET_GLYPH.get(key, ""),
+                "longitude": float(block["longitude"]),
+                "sign_ru": block.get("sign_ru"),
+                "house": block.get("house"),
+                "retrograde": bool(block.get("retrograde")),
+            }
+        )
+    houses = []
+    for row in natal.get("houses") or []:
+        if not isinstance(row, dict):
+            continue
+        houses.append(
+            {
+                "house": int(row.get("house") or 0),
+                "cusp": float(row.get("cusp_longitude") or 0),
+                "sign_ru": row.get("sign_ru") or "",
+            }
+        )
+    lines = [
+        {
+            "a": row["a"],
+            "b": row["b"],
+            "kind": row["kind"],
+            "aspect": row["aspect"],
+        }
+        for row in aspects
+        if row.get("a") in PLANET_ORDER and row.get("b") in PLANET_ORDER
+    ]
+    return {
+        "ascendant_longitude": asc_lon,
+        "mc_longitude": float(mc["longitude"]) if mc else None,
+        "has_birth_time": bool(natal.get("has_birth_time")),
+        "house_system": natal.get("house_system") or "placidus",
+        "planets": planets,
+        "houses": houses,
+        "aspects": lines[:18],
+        "signs": [
+            {"sign": SIGNS[i], "sign_ru": SIGNS_RU[SIGNS[i]], "start": i * 30}
+            for i in range(12)
+        ],
+    }
+
+
 def method_block(natal: dict[str, Any], sky: dict[str, Any]) -> dict[str, Any]:
     engine = str(natal.get("engine") or "")
-    engine_label = "Swiss Ephemeris" if "swiss" in engine else "натальный расчёт Cosmirror"
+    engine_label = "Swiss Ephemeris · Плацидус"
     when = str(sky.get("datetime_utc") or "")
     has_time = bool(natal.get("has_birth_time"))
     notes = [str(n) for n in (natal.get("notes") or []) if n]
@@ -290,19 +355,17 @@ def method_block(natal: dict[str, Any], sky: dict[str, Any]) -> dict[str, Any]:
         "engine": engine,
         "engine_label": engine_label,
         "system": natal.get("system") or "tropical",
-        "house_system": natal.get("house_system") or ("whole_sign" if has_time else None),
+        "house_system": natal.get("house_system") or ("placidus" if has_time else None),
         "has_birth_time": has_time,
         "sky_datetime_utc": when,
         "what_calculated": [
-            "положения планет натальной карты в тропическом зодиаке",
-            "натальные аспекты между планетами (и углами, если есть время)",
-            "текущие транзиты: аспекты неба к натальным точкам с орбом и направлением",
-            "общий фон внешних планет — отдельно от персональных попаданий",
+            "тропическая натальная карта, система домов Плацидус — как в классическом расчёте GeoCult",
+            "положения планет в знаках и домах",
+            "натальные аспекты и текущие транзиты к натальным точкам",
         ],
         "what_it_means": (
-            "Расчёт показывает, какие темы карты сейчас подсвечены небом. "
-            "Это не список будущих событий. Орб говорит о близости контакта, "
-            "аспект — о характере напряжения или поддержки, дом — о сфере жизни."
+            "Карта показывает темы и склонности, циклы — какой фон сейчас громче. "
+            "Это не список будущих событий."
         ),
         "notes": notes,
     }

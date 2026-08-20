@@ -92,3 +92,39 @@ def whole_sign_houses(asc_sign_index: int) -> list[dict[str, Any]]:
         }
         for i in range(12)
     ]
+
+
+def in_house_arc(longitude: float, start: float, end: float) -> bool:
+    lon = longitude % 360.0
+    start = start % 360.0
+    end = end % 360.0
+    if start <= end:
+        return start <= lon < end
+    return lon >= start or lon < end
+
+
+def house_of_longitude(longitude: float, cusps: list[float]) -> int:
+    """cusps — 12 куспидов домов Плацидуса, дом 1 = индекс 0."""
+    if len(cusps) != 12:
+        return 1
+    for i in range(12):
+        if in_house_arc(longitude, cusps[i], cusps[(i + 1) % 12]):
+            return i + 1
+    return 12
+
+
+def houses_from_cusps(cusps: list[float]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for i, cusp in enumerate(cusps):
+        block = sign_of(cusp)
+        rows.append(
+            {
+                "house": i + 1,
+                "sign": block["sign"],
+                "sign_ru": block["sign_ru"],
+                "sign_index": block["sign_index"],
+                "degree": block["degree"],
+                "cusp_longitude": round(float(cusp) % 360.0, 4),
+            }
+        )
+    return rows

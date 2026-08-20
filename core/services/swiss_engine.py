@@ -1,8 +1,7 @@
 """
 Натальный расчёт на Swiss Ephemeris (pyswisseph).
 
-Тот же контракт chart_data, что у Skyfield-движка в natal.py:
-planets / ascendant / midheaven / houses (whole_sign).
+Классическая карта в логике GeoCult: тропический зодиак, дома Плацидуса.
 """
 
 from __future__ import annotations
@@ -17,9 +16,10 @@ from core.services.natal_common import (
     SIGNS,
     SIGNS_RU,
     NatalCalcError,
+    house_of_longitude,
+    houses_from_cusps,
     local_to_utc,
     sign_of,
-    whole_sign_houses,
 )
 
 ENGINE_ID = "swiss_ephemeris"
@@ -93,14 +93,13 @@ def planet_longitudes(dt_utc: datetime) -> dict[str, dict[str, Any]]:
     return {key: _calc_body(jd, body_id) for key, body_id in BODIES.items()}
 
 
-def _asc_mc(jd_ut: float, lat: float, lng: float) -> tuple[float, float]:
-    """
-    Asc / MC через Swiss houses.
-    Система 'P' (Placidus) нужна только чтобы получить ascmc;
-    дома в ответе всё равно whole_sign от знака Asc — как у Skyfield-ветки.
-    """
-    _cusps, ascmc = swe.houses(jd_ut, float(lat), float(lng), b"P")
-    return float(ascmc[0]) % 360.0, float(ascmc[1]) % 360.0
+def _placidus_houses(jd_ut: float, lat: float, lng: float) -> tuple[float, float, list[float]]:
+    """Asc, MC и 12 куспидов Плацидуса — как в классическом расчёте GeoCult."""
+    cusps, ascmc = swe.houses(jd_ut, float(lat), float(lng), b"P")
+    # pyswisseph отдаёт 12 куспидов (дом 1 = индекс 0); C API — 13 с пустым [0].
+    start = 1 if len(cusps) >= 13 else 0
+    house_cusps = [float(cusps[i]) % 360.0 for i in range(start, start + 12)]
+    return float(ascmc[0]) % 360.0, float(ascmc[1]) % 360.0, house_cusps
 
 
 def calculate_positions(dt_utc: datetime) -> dict[str, dict[str, Any]]:
@@ -148,15 +147,16 @@ def calculate_natal(
         return result
 
     jd = _jd_ut(dt_utc)
-    asc_deg, mc_deg = _asc_mc(jd, float(latitude), float(longitude))
+    asc_deg, mc_deg, cusps = _placidus_houses(jd, float(latitude), float(longitude))
     asc = sign_of(asc_deg)
     mc = sign_of(mc_deg)
     result["ascendant"] = asc
     result["midheaven"] = mc
-    result["houses"] = whole_sign_houses(asc["sign_index"])
-    result["house_system"] = "whole_sign"
+    result["houses"] = houses_from_cusps(cusps)
+    result["house_system"] = "placidus"
+    result["house_system_label"] = "Плацидус"
     for data in planets.values():
-        data["house"] = ((data["sign_index"] - asc["sign_index"]) % 12) + 1
+        data["house"] = house_of_longitude(float(data["longitude"]), cusps)
     result["notes"] = []
     return result
 

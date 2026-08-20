@@ -152,15 +152,13 @@ def _success_url(order: Order) -> str:
     base = _public_frontend_base()
     if not base.startswith("https://"):
         return ""
-    return f"{base}/report/{order.public_id}/?from=prodamus"
+    return f"{base}/account/?from=prodamus"
 
 
 def _return_url(order: Order | None = None) -> str:
     base = _public_frontend_base()
     if not base.startswith("https://"):
         return ""
-    if order is not None:
-        return f"{base}/pay/failed/?order={order.public_id}"
     return f"{base}/pay/failed/"
 
 
@@ -277,8 +275,12 @@ def create_or_resume_order(
     discount = _discount_for_promo(promo) if promo else None
     request_hash = _request_hash(str(session.token), sku, promo)
     email, phone, telegram = _contacts(session)
+    if not session.user_id:
+        raise OrderError("Сначала войди через Яндекс ID.", 401)
     if not email:
-        raise OrderError("Сначала укажи email на шаге контактов.", 400)
+        raise OrderError("Сначала войди через Яндекс ID, чтобы подтянуть почту.", 400)
+    if not telegram:
+        raise OrderError("Укажи Telegram на шаге проверки почты.", 400)
 
     paid = (
         Order.objects.filter(
