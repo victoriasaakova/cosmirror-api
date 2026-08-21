@@ -504,6 +504,7 @@ class YandexOAuthState(models.Model):
         related_name="yandex_oauth_states",
     )
     code_verifier = models.CharField(max_length=128)
+    redirect_uri = models.CharField(max_length=500, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

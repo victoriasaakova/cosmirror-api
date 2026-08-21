@@ -63,8 +63,71 @@ def is_configured() -> bool:
     )
 
 
-def redirect_uri() -> str:
+def _configured_redirect_uri() -> str:
     return (getattr(settings, "YANDEX_OAUTH_REDIRECT_URI", "") or "").strip()
+
+
+def normalize_redirect_uri(uri: str) -> str:
+    """Yandex сравнивает Callback URL посимвольно: слэш, www и query уже другой адрес."""
+    parts = urllib.parse.urlsplit((uri or "").strip())
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        return ""
+    path = parts.path.rstrip("/")
+    return urllib.parse.urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, "", ""))
+
+
+def redirect_uri() -> str:
+    return normalize_redirect_uri(_configured_redirect_uri())
+
+
+def _allowed_redirect_hosts() -> set[str]:
+    hosts: set[str] = set()
+    origins = [
+        getattr(settings, "FRONTEND_URL", "") or "",
+        getattr(settings, "PUBLIC_API_URL", "") or "",
+        *list(getattr(settings, "CORS_ALLOWED_ORIGINS", []) or []),
+    ]
+    for origin in origins:
+        host = urllib.parse.urlsplit(str(origin).strip()).netloc.lower()
+        if host:
+            hosts.add(host)
+            if host.startswith("www."):
+                hosts.add(host[4:])
+            else:
+                hosts.add(f"www.{host}")
+    hosts.update(
+        {
+            "localhost:3000",
+            "127.0.0.1:3000",
+            "localhost:8000",
+            "127.0.0.1:8000",
+        }
+    )
+    return hosts
+
+
+def _allowed_redirect_paths() -> set[str]:
+    return {"/onboarding/contacts", "/api/auth/yandex/callback"}
+
+
+def is_allowed_redirect_uri(uri: str) -> bool:
+    normalized = normalize_redirect_uri(uri)
+    if not normalized:
+        return False
+    parts = urllib.parse.urlsplit(normalized)
+    return parts.netloc in _allowed_redirect_hosts() and parts.path in _allowed_redirect_paths()
+
+
+def resolve_redirect_uri(requested: str | None = None) -> str:
+    for raw in (requested or "", _configured_redirect_uri()):
+        normalized = normalize_redirect_uri(raw)
+        if normalized and is_allowed_redirect_uri(normalized):
+            return normalized
+    raise YandexOAuthError(
+        "Redirect URI Яндекс ID не совпадает с адресом возврата. "
+        "В кабинете OAuth укажи тот же URL, без завершающего слэша.",
+        503,
+    )
 
 
 def _client_id() -> str:
@@ -87,12 +150,10 @@ def _cleanup_states() -> None:
     YandexOAuthState.objects.filter(created_at__lt=cutoff).delete()
 
 
-def build_authorize_url(*, session: OnboardingSession) -> str:
+def build_authorize_url(*, session: OnboardingSession, requested_redirect: str | None = None) -> str:
     if not is_configured():
         raise YandexOAuthError("Яндекс ID не настроен.", 503)
-    uri = redirect_uri()
-    if not uri:
-        raise YandexOAuthError("Не задан Redirect URI Яндекс ID.", 503)
+    uri = resolve_redirect_uri(requested_redirect)
     _cleanup_states()
     verifier, challenge = _pkce_pair()
     nonce = secrets.token_urlsafe(24)
@@ -100,6 +161,7 @@ def build_authorize_url(*, session: OnboardingSession) -> str:
         nonce=nonce,
         session=session,
         code_verifier=verifier,
+        redirect_uri=uri,
     )
     query = urllib.parse.urlencode(
         {
@@ -205,6 +267,7 @@ def exchange_code(*, code: str, state: str) -> tuple[OnboardingSession, YandexPr
             "client_id": _client_id(),
             "client_secret": _client_secret(),
             "code_verifier": record.code_verifier,
+            "redirect_uri": record.redirect_uri or redirect_uri(),
         },
     )
     access_token = str(token_payload.get("access_token") or "")

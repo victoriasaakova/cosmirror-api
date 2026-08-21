@@ -1,7 +1,7 @@
 from datetime import date, time
 from decimal import Decimal
 from unittest.mock import patch
-from urllib.parse import unquote_plus, urlencode
+from urllib.parse import parse_qs, unquote_plus, urlencode, urlparse
 
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
@@ -877,6 +877,9 @@ class SwissPlacidusTests(TestCase):
     YANDEX_OAUTH_CLIENT_ID="test-client",
     YANDEX_OAUTH_CLIENT_SECRET="test-secret",
     YANDEX_OAUTH_REDIRECT_URI="http://localhost:3000/onboarding/contacts/",
+    FRONTEND_URL="http://localhost:3000",
+    PUBLIC_API_URL="http://127.0.0.1:8000",
+    CORS_ALLOWED_ORIGINS=["http://localhost:3000"],
 )
 class YandexAuthTests(TestCase):
     def setUp(self):
@@ -900,6 +903,33 @@ class YandexAuthTests(TestCase):
         self.assertIn("client_id=test-client", url)
         self.assertIn("code_challenge", url)
         self.assertIn("login%3Aemail", url.replace("+", "%20"))
+        redirect = parse_qs(urlparse(url).query)["redirect_uri"][0]
+        self.assertEqual(redirect, "http://localhost:3000/onboarding/contacts")
+        self.assertEqual(response.json()["redirect_uri"], redirect)
+
+    def test_start_uses_page_redirect_without_trailing_slash(self):
+        response = self.client.get(
+            "/api/auth/yandex/start/",
+            {
+                "session_token": str(self.session.token),
+                "redirect_uri": "http://localhost:3000/onboarding/contacts/",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        redirect = parse_qs(urlparse(response.json()["url"]).query)["redirect_uri"][0]
+        self.assertEqual(redirect, "http://localhost:3000/onboarding/contacts")
+
+    def test_start_rejects_foreign_redirect(self):
+        response = self.client.get(
+            "/api/auth/yandex/start/",
+            {
+                "session_token": str(self.session.token),
+                "redirect_uri": "https://evil.example/onboarding/contacts",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        redirect = parse_qs(urlparse(response.json()["url"]).query)["redirect_uri"][0]
+        self.assertEqual(redirect, "http://localhost:3000/onboarding/contacts")
 
     @patch("core.services.yandex_oauth._get_json")
     @patch("core.services.yandex_oauth._post_form")
@@ -910,6 +940,7 @@ class YandexAuthTests(TestCase):
             nonce="state-1",
             session=self.session,
             code_verifier="verifier",
+            redirect_uri="http://localhost:3000/onboarding/contacts",
         )
         post_form.return_value = {"access_token": "ya-token"}
         get_json.return_value = {
@@ -926,6 +957,10 @@ class YandexAuthTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(
+            post_form.call_args[0][1]["redirect_uri"],
+            "http://localhost:3000/onboarding/contacts",
+        )
         data = response.json()
         self.assertTrue(data["token"])
         self.session.refresh_from_db()
@@ -940,5 +975,32 @@ class YandexAuthTests(TestCase):
             HTTP_AUTHORIZATION=f"Bearer {data['token']}",
         )
         self.assertEqual(report.status_code, 404)
+
+    @patch("core.services.yandex_oauth._get_json")
+    @patch("core.services.yandex_oauth._post_form")
+    def test_yandex_get_callback_redirects_to_insight(self, post_form, get_json):
+        from core.models import YandexOAuthState
+
+        YandexOAuthState.objects.create(
+            nonce="state-2",
+            session=self.session,
+            code_verifier="verifier",
+            redirect_uri="http://localhost:3000/onboarding/contacts",
+        )
+        post_form.return_value = {"access_token": "ya-token"}
+        get_json.return_value = {
+            "id": "99",
+            "login": "anna",
+            "default_email": "anna@yandex.ru",
+            "display_name": "Анна",
+        }
+        response = self.client.get(
+            "/api/auth/yandex/callback/",
+            {"code": "999", "state": "state-2"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/onboarding/insight/", response["Location"])
+        self.assertIn("#auth=", response["Location"])
+
 
 

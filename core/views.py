@@ -1,10 +1,11 @@
 import logging
 from typing import Optional
+from urllib.parse import quote
 
 from django.conf import settings
 from django.db.models import Q
 from django.http import HttpResponse
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, redirect
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -57,6 +58,7 @@ from .services.yandex_oauth import (
     build_authorize_url,
     complete_yandex_login,
     exchange_code,
+    resolve_redirect_uri,
 )
 
 
@@ -125,16 +127,36 @@ class YandexAuthStartView(APIView):
         if not token:
             return Response({"detail": "session_token обязателен."}, status=status.HTTP_400_BAD_REQUEST)
         session = get_object_or_404(OnboardingSession, token=token)
+        requested = (request.query_params.get("redirect_uri") or "").strip()
         try:
-            url = build_authorize_url(session=session)
+            uri = resolve_redirect_uri(requested)
+            url = build_authorize_url(session=session, requested_redirect=uri)
         except YandexOAuthError as exc:
             return Response({"detail": exc.detail}, status=exc.status)
-        return Response({"url": url, "redirect_uri": getattr(settings, "YANDEX_OAUTH_REDIRECT_URI", "")})
+        return Response({"url": url, "redirect_uri": uri})
 
 
 class YandexAuthCallbackView(APIView):
     permission_classes = [permissions.AllowAny]
     authentication_classes: list = []
+
+    def get(self, request):
+        frontend = (getattr(settings, "FRONTEND_URL", "") or "https://cosmirror.ru").rstrip("/")
+        error = (request.query_params.get("error") or "").strip()
+        if error:
+            return redirect(f"{frontend}/onboarding/contacts/?error={quote(error)}")
+        try:
+            session, profile = exchange_code(
+                code=str(request.query_params.get("code") or ""),
+                state=str(request.query_params.get("state") or ""),
+            )
+            _user, auth_token = complete_yandex_login(session=session, profile=profile)
+        except YandexOAuthError:
+            return redirect(f"{frontend}/onboarding/contacts/?error=oauth")
+        return redirect(
+            f"{frontend}/onboarding/insight/"
+            f"#auth={quote(auth_token.key)}&session_token={quote(str(session.token))}"
+        )
 
     def post(self, request):
         try:

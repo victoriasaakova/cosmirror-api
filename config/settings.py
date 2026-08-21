@@ -152,7 +152,7 @@ PUBLIC_API_URL = (os.getenv("PUBLIC_API_URL") or "http://127.0.0.1:8000").rstrip
 YANDEX_OAUTH_CLIENT_ID = (os.getenv("YANDEX_OAUTH_CLIENT_ID") or "").strip()
 YANDEX_OAUTH_CLIENT_SECRET = (os.getenv("YANDEX_OAUTH_CLIENT_SECRET") or "").strip()
 YANDEX_OAUTH_REDIRECT_URI = (
-    os.getenv("YANDEX_OAUTH_REDIRECT_URI") or f"{FRONTEND_URL}/onboarding/contacts/"
+    os.getenv("YANDEX_OAUTH_REDIRECT_URI") or f"{FRONTEND_URL}/onboarding/contacts"
 ).strip()
 
 # Товар по умолчанию. Имя попадает в чек (54-ФЗ, до 128 символов).
