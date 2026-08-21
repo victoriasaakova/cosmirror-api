@@ -902,8 +902,9 @@ class YandexAuthTests(TestCase):
         self.assertIn("oauth.yandex.ru/authorize", url)
         self.assertIn("client_id=test-client", url)
         self.assertIn("code_challenge", url)
-        self.assertIn("login%3Aemail", url.replace("+", "%20"))
-        redirect = parse_qs(urlparse(url).query)["redirect_uri"][0]
+        query = parse_qs(urlparse(url).query)
+        self.assertNotIn("scope", query)
+        redirect = query["redirect_uri"][0]
         self.assertEqual(redirect, "http://localhost:3000/onboarding/contacts")
         self.assertEqual(response.json()["redirect_uri"], redirect)
 

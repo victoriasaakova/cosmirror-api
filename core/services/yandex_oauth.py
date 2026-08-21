@@ -35,7 +35,6 @@ logger = logging.getLogger(__name__)
 AUTHORIZE_URL = "https://oauth.yandex.ru/authorize"
 TOKEN_URL = "https://oauth.yandex.ru/token"
 USERINFO_URL = "https://login.yandex.ru/info"
-SCOPE = "login:info login:email"
 STATE_TTL = timedelta(minutes=15)
 
 
@@ -163,17 +162,17 @@ def build_authorize_url(*, session: OnboardingSession, requested_redirect: str |
         code_verifier=verifier,
         redirect_uri=uri,
     )
-    query = urllib.parse.urlencode(
-        {
-            "response_type": "code",
-            "client_id": _client_id(),
-            "redirect_uri": uri,
-            "scope": SCOPE,
-            "state": nonce,
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-        }
-    )
+    params = {
+        "response_type": "code",
+        "client_id": _client_id(),
+        "redirect_uri": uri,
+        "state": nonce,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }
+    # Не шлём scope: иначе Яндекс отвечает invalid_scope, если в кабинете
+    # нет всех перечисленных прав. Без параметра берутся доступы приложения.
+    query = urllib.parse.urlencode(params)
     return f"{AUTHORIZE_URL}?{query}"
 
 
