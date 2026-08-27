@@ -224,6 +224,94 @@ def _parse_json(raw: str) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def looks_like_account_handle(value: str, *, login: str = "", email: str = "") -> bool:
+    """Yandex `display_name` is often the login (saakova.vi), not a given name."""
+    raw = (value or "").strip()
+    if not raw:
+        return True
+    lowered = raw.lower()
+    if login and lowered == login.strip().lower():
+        return True
+    local = ""
+    if email and "@" in email:
+        local = email.split("@", 1)[0].strip().lower()
+    if local and lowered == local:
+        return True
+    has_cyrillic = any("а" <= char.lower() <= "я" or char.lower() == "ё" for char in raw)
+    if " " not in raw and "." in raw and not has_cyrillic:
+        return True
+    return False
+
+
+def _human_given_name(*, first_name: str, real_name: str, display_name: str, login: str, email: str) -> str:
+    first = (first_name or "").strip()
+    if first and not looks_like_account_handle(first, login=login, email=email):
+        return first
+    real = (real_name or "").strip()
+    if real:
+        token = real.split()[0].strip()
+        if token and not looks_like_account_handle(token, login=login, email=email):
+            return token
+    shown = (display_name or "").strip()
+    if shown and not looks_like_account_handle(shown, login=login, email=email):
+        return shown
+    return ""
+
+
+def quiz_name_from_session(session: OnboardingSession | None) -> str:
+    if session is None:
+        return ""
+    answer = (
+        OnboardingStepAnswer.objects.filter(session=session, step__slug="name")
+        .order_by("-updated_at")
+        .first()
+    )
+    if answer is None or not isinstance(answer.payload, dict):
+        return ""
+    return str(answer.payload.get("name") or "").strip()
+
+
+def quiz_name_from_user(user: User) -> str:
+    answer = (
+        OnboardingStepAnswer.objects.filter(session__user=user, step__slug="name")
+        .order_by("-updated_at")
+        .first()
+    )
+    if answer is None or not isinstance(answer.payload, dict):
+        return ""
+    return str(answer.payload.get("name") or "").strip()
+
+
+def resolved_display_name(user: User) -> str:
+    email = (user.email or "").strip()
+    quiz = quiz_name_from_user(user)
+    if quiz and not looks_like_account_handle(quiz, email=email):
+        return quiz
+    first = (user.first_name or "").strip()
+    if first and not looks_like_account_handle(first, email=email):
+        return first
+    account = getattr(user, "profile", None)
+    stored = (getattr(account, "display_name", None) or "").strip()
+    if stored and not looks_like_account_handle(stored, email=email):
+        return stored
+    return ""
+
+
+def maybe_repair_display_name(user: User) -> None:
+    wanted = resolved_display_name(user)
+    if not wanted:
+        return
+    account, _ = Profile.objects.get_or_create(user=user)
+    if account.display_name == wanted:
+        return
+    if account.display_name and not looks_like_account_handle(
+        account.display_name, email=user.email or ""
+    ):
+        return
+    account.display_name = wanted
+    account.save(update_fields=["display_name"])
+
+
 def _profile_from_info(info: dict[str, Any]) -> YandexProfile:
     yandex_id = str(info.get("id") or "").strip()
     if not yandex_id:
@@ -232,16 +320,21 @@ def _profile_from_info(info: dict[str, Any]) -> YandexProfile:
     email = str(info.get("default_email") or (emails[0] if emails else "") or "").strip().lower()
     if not email or "@" not in email:
         raise YandexOAuthError("Нужен доступ к почте Яндекса, чтобы открыть разбор.", 400)
+    login = str(info.get("login") or "").strip()
     first_name = str(info.get("first_name") or "").strip()
     last_name = str(info.get("last_name") or "").strip()
-    display_name = str(
-        info.get("display_name") or info.get("real_name") or first_name or info.get("login") or ""
-    ).strip()
+    display_name = _human_given_name(
+        first_name=first_name,
+        real_name=str(info.get("real_name") or ""),
+        display_name=str(info.get("display_name") or ""),
+        login=login,
+        email=email,
+    )
     return YandexProfile(
         yandex_id=yandex_id,
-        login=str(info.get("login") or "").strip(),
+        login=login,
         email=email,
-        first_name=first_name,
+        first_name=first_name if not looks_like_account_handle(first_name, login=login, email=email) else "",
         last_name=last_name,
         display_name=display_name,
     )
@@ -355,8 +448,14 @@ def _refresh_user_profile(user: User, profile: YandexProfile) -> None:
         user.save(update_fields=[*changed])
     account, _ = Profile.objects.get_or_create(user=user)
     account.yandex_id = profile.yandex_id
-    if profile.display_name and not account.display_name:
-        account.display_name = profile.display_name
+    wanted = profile.display_name or profile.first_name
+    if wanted and (
+        not account.display_name
+        or looks_like_account_handle(
+            account.display_name, login=profile.login, email=profile.email
+        )
+    ):
+        account.display_name = wanted
     account.registration_status = Profile.RegistrationStatus.ACTIVE
     account.save()
 
@@ -395,7 +494,10 @@ def attach_session_to_user(
     if session.timezone and (not account.timezone or account.timezone == "UTC"):
         account.timezone = session.timezone
         profile_fields.append("timezone")
-    if name and not account.display_name:
+    if name and (
+        not account.display_name
+        or looks_like_account_handle(account.display_name, email=email)
+    ):
         account.display_name = name
         profile_fields.append("display_name")
     if profile_fields:
@@ -470,5 +572,6 @@ def complete_yandex_login(
     profile: YandexProfile,
 ) -> tuple[User, AuthToken]:
     user = get_or_create_yandex_user(profile)
-    attach_session_to_user(session, user, email=profile.email, name=profile.display_name)
+    given = quiz_name_from_session(session) or profile.display_name or profile.first_name
+    attach_session_to_user(session, user, email=profile.email, name=given)
     return user, issue_auth_token(user)

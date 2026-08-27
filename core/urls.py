@@ -5,6 +5,7 @@ from . import views
 urlpatterns = [
     path("health/", views.HealthView.as_view(), name="health"),
     path("me/", views.MeView.as_view(), name="me"),
+    path("me/birth/", views.MeBirthView.as_view(), name="me-birth"),
     path(
         "auth/yandex/start/",
         views.YandexAuthStartView.as_view(),

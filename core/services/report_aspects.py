@@ -78,10 +78,14 @@ def apply_aspects_to_document(
     *,
     source: str,
     model: str = "",
+    sealed: bool = False,
 ) -> dict[str, Any]:
-    payload = normalize_aspects_payload(payload, fallback_aspects_interpretation(document))
-    if source == "fallback":
-        payload["source"] = "fallback"
+    if sealed and source == "llm" and isinstance(payload, dict) and isinstance(payload.get("aspects"), list):
+        payload = {**payload, "source": "llm", "report_type": payload.get("report_type") or "natal_aspects"}
+    else:
+        payload = normalize_aspects_payload(payload, fallback_aspects_interpretation(document))
+        if source == "fallback":
+            payload["source"] = "fallback"
     interpretive = document.setdefault("interpretive", {})
     if interpretive.get("status") != "llm":
         interpretive["status"] = "llm" if source == "llm" else "fallback"

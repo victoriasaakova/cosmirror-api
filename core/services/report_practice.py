@@ -75,8 +75,11 @@ def apply_practice_to_document(
     source: str,
     model: str = "",
     error: str = "",
+    sealed: bool = False,
 ) -> dict[str, Any]:
-    if source == "llm":
+    if sealed and source == "llm" and isinstance(payload, dict) and isinstance(payload.get("start_here"), dict):
+        payload = {**payload, "source": "llm", "report_type": payload.get("report_type") or "practice"}
+    elif source == "llm":
         accepted = accept_generated_practice(payload, fallback_practice_interpretation(document))
         if accepted is None:
             source = "fallback"

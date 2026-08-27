@@ -112,10 +112,15 @@ def apply_natal_to_document(
     *,
     source: str,
     model: str = "",
+    sealed: bool = False,
 ) -> dict[str, Any]:
-    payload = normalize_natal_payload(payload, fallback_natal_interpretation(document))
-    if source == "fallback":
-        payload["source"] = "fallback"
+    if sealed and source == "llm" and isinstance(payload, dict) and payload.get("core_portrait"):
+        # Atomic GET overlay: never field-merge sealed LLM with live fallback.
+        payload = {**payload, "source": "llm", "report_type": payload.get("report_type") or "natal"}
+    else:
+        payload = normalize_natal_payload(payload, fallback_natal_interpretation(document))
+        if source == "fallback":
+            payload["source"] = "fallback"
     interpretive = document.setdefault("interpretive", {})
     interpretive["status"] = "llm" if source == "llm" else "fallback"
     interpretive["natal"] = {

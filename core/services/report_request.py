@@ -76,8 +76,11 @@ def apply_request_to_document(
     source: str,
     model: str = "",
     error: str = "",
+    sealed: bool = False,
 ) -> dict[str, Any]:
-    if source == "llm":
+    if sealed and source == "llm" and isinstance(payload, dict) and isinstance(payload.get("request"), dict):
+        payload = {**payload, "source": "llm", "report_type": payload.get("report_type") or "request"}
+    elif source == "llm":
         accepted = accept_generated_request(payload, fallback_request_interpretation(document))
         if accepted is None:
             source = "fallback"

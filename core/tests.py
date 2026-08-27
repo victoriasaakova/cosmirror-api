@@ -1390,6 +1390,516 @@ class LlmProviderOffTests(TestCase):
         self.assertFalse(is_configured())
 
 
+class PaidReportLlmFirstOverlayTests(TestCase):
+    """LLM-first GET overlay: sealed source=llm always wins; provider only gates new calls."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user, self.auth_key = _make_user(email="overlay@example.com", yandex_id="6106")
+        lead = WaitlistLead.objects.create(email="overlay@example.com", user=self.user)
+        session = OnboardingSession.objects.create(
+            waitlist_lead=lead,
+            user=self.user,
+            birth_date=date(1993, 8, 21),
+            birth_time=time(9, 45),
+            birth_place="Москва",
+            timezone="Europe/Moscow",
+        )
+        natal = {
+            "engine": "swiss_ephemeris",
+            "has_birth_time": True,
+            "timezone": "Europe/Moscow",
+            "location": {"place": "Москва", "lat": 55.75, "lng": 37.61},
+            "planets": {
+                "sun": {
+                    "sign": "leo",
+                    "sign_ru": "Лев",
+                    "degree": 28.1,
+                    "sign_index": 4,
+                    "house": 10,
+                },
+                "moon": {
+                    "sign": "capricorn",
+                    "sign_ru": "Козерог",
+                    "degree": 12.0,
+                    "sign_index": 9,
+                    "house": 3,
+                },
+            },
+            "ascendant": {"sign": "scorpio", "sign_ru": "Скорпион", "degree": 5.0, "sign_index": 7},
+            "houses": [
+                {"house": i + 1, "sign": "scorpio", "sign_ru": "Скорпион"} for i in range(12)
+            ],
+        }
+        NatalChart.objects.create(
+            session=session,
+            birth_date=date(1993, 8, 21),
+            birth_time=time(9, 45),
+            birth_place="Москва",
+            status=NatalChart.Status.READY,
+            chart_data=natal,
+        )
+        self.order = Order.objects.create(
+            idempotency_key="overlay-key-0001",
+            idempotency_request_hash="d" * 64,
+            session=session,
+            waitlist_lead=lead,
+            user=self.user,
+            customer_email="overlay@example.com",
+            product_sku="personal_report",
+            product_name="Персональный разбор Cosmirror",
+            amount=Decimal("777.00"),
+            status=Order.Status.PAID,
+        )
+
+    def _report(self):
+        from core.services.report import build_paid_report
+
+        return build_paid_report(self.order)
+
+    @override_settings(LLM_PROVIDER="auto", POLZA_API_KEY="test-key")
+    def test_valid_persisted_llm_shown_when_provider_on(self):
+        from core.services import llm_client
+
+        self.assertTrue(llm_client.is_configured())
+        self.order.interpretive = {
+            "generation": {"status": "done"},
+            "natal": {
+                "status": "ready",
+                "source": "llm",
+                "payload": {
+                    "core_portrait": {"headline": "LLM natal headline", "summary": "x" * 50},
+                },
+            },
+        }
+        self.order.save(update_fields=["interpretive"])
+        natal = self._report()["document"]["interpretive"]["natal"]
+        self.assertEqual(natal["source"], "llm")
+        self.assertEqual(natal["payload"]["core_portrait"]["headline"], "LLM natal headline")
+
+    @override_settings(LLM_PROVIDER="off", POLZA_API_KEY="test-key")
+    def test_valid_persisted_llm_shown_when_provider_off(self):
+        from core.services import llm_client
+
+        self.assertFalse(llm_client.is_configured())
+        self.order.interpretive = {
+            "generation": {"status": "done"},
+            "natal": {
+                "status": "ready",
+                "source": "llm",
+                "payload": {
+                    "core_portrait": {"headline": "Sealed while off", "summary": "x" * 50},
+                },
+            },
+        }
+        self.order.save(update_fields=["interpretive"])
+        natal = self._report()["document"]["interpretive"]["natal"]
+        self.assertEqual(natal["source"], "llm")
+        self.assertEqual(natal["payload"]["core_portrait"]["headline"], "Sealed while off")
+
+    @override_settings(LLM_PROVIDER="auto", POLZA_API_KEY="test-key")
+    def test_no_persisted_llm_pending_uses_live_fallback(self):
+        self.order.interpretive = {"generation": {"status": "running"}}
+        self.order.save(update_fields=["interpretive"])
+        interpretive = self._report()["document"]["interpretive"]
+        self.assertEqual(interpretive["generation"]["status"], "running")
+        for key in ("natal", "aspects", "cycles", "request", "practice"):
+            self.assertEqual(interpretive[key]["source"], "fallback", key)
+        self.assertTrue(interpretive["natal"]["payload"]["core_portrait"]["headline"])
+
+    @override_settings(LLM_PROVIDER="auto", POLZA_API_KEY="test-key")
+    def test_stored_fallback_error_uses_live_fallback_not_cached_payload(self):
+        self.order.interpretive = {
+            "generation": {"status": "done"},
+            "natal": {
+                "status": "ready",
+                "source": "fallback",
+                "error": "Polza request failed: APIStatusError",
+                "payload": {
+                    "core_portrait": {
+                        "headline": "Stale failed payload must not win",
+                        "summary": "x" * 50,
+                    },
+                },
+            },
+        }
+        self.order.save(update_fields=["interpretive"])
+        natal = self._report()["document"]["interpretive"]["natal"]
+        self.assertEqual(natal["source"], "fallback")
+        self.assertNotEqual(
+            natal["payload"]["core_portrait"]["headline"],
+            "Stale failed payload must not win",
+        )
+
+    @override_settings(LLM_PROVIDER="auto", POLZA_API_KEY="test-key")
+    def test_mixed_llm_and_fallback_sections(self):
+        self.order.interpretive = {
+            "generation": {"status": "running"},
+            "natal": {
+                "status": "ready",
+                "source": "llm",
+                "payload": {
+                    "core_portrait": {"headline": "Mixed natal LLM", "summary": "x" * 50},
+                },
+            },
+            "aspects": {
+                "status": "ready",
+                "source": "llm",
+                "payload": {
+                    "aspects": [
+                        {"aspect_id": "a1", "summary": "x" * 50, "headline": "Mixed aspect"}
+                    ],
+                },
+            },
+        }
+        self.order.save(update_fields=["interpretive"])
+        report = self._report()
+        interpretive = report["document"]["interpretive"]
+        self.assertEqual(interpretive["natal"]["source"], "llm")
+        self.assertEqual(
+            interpretive["natal"]["payload"]["core_portrait"]["headline"],
+            "Mixed natal LLM",
+        )
+        self.assertEqual(interpretive["aspects"]["source"], "llm")
+        self.assertEqual(interpretive["cycles"]["source"], "fallback")
+        self.assertEqual(interpretive["request"]["source"], "fallback")
+        self.assertEqual(interpretive["practice"]["source"], "fallback")
+        self.assertTrue(report["document"]["sections"])
+
+    @patch("core.services.report_jobs.kickoff_paid_report_for_order")
+    def test_me_report_get_still_kickoffs_outside_assembler(self, kickoff):
+        response = self.client.get(
+            "/api/me/report/",
+            HTTP_AUTHORIZATION=f"Bearer {self.auth_key}",
+        )
+        self.assertEqual(response.status_code, 200)
+        kickoff.assert_called()
+        report = response.json()["report"]
+        self.assertIn("document", report)
+        self.assertIn("natal", report["document"]["interpretive"])
+
+
+class PaidReportSectionIsolationTests(TestCase):
+    """Section-local unexpected exceptions must not abort remaining layers."""
+
+    def setUp(self):
+        self.user, self.auth_key = _make_user(email="isolate@example.com", yandex_id="6107")
+        lead = WaitlistLead.objects.create(email="isolate@example.com", user=self.user)
+        session = OnboardingSession.objects.create(
+            waitlist_lead=lead,
+            user=self.user,
+            birth_date=date(1993, 8, 21),
+            birth_time=time(9, 45),
+            birth_place="Москва",
+            timezone="Europe/Moscow",
+        )
+        natal = {
+            "engine": "swiss_ephemeris",
+            "has_birth_time": True,
+            "timezone": "Europe/Moscow",
+            "location": {"place": "Москва", "lat": 55.75, "lng": 37.61},
+            "planets": {
+                "sun": {
+                    "sign": "leo",
+                    "sign_ru": "Лев",
+                    "degree": 28.1,
+                    "sign_index": 4,
+                    "house": 10,
+                },
+                "moon": {
+                    "sign": "capricorn",
+                    "sign_ru": "Козерог",
+                    "degree": 12.0,
+                    "sign_index": 9,
+                    "house": 3,
+                },
+            },
+            "ascendant": {"sign": "scorpio", "sign_ru": "Скорпион", "degree": 5.0, "sign_index": 7},
+            "houses": [
+                {"house": i + 1, "sign": "scorpio", "sign_ru": "Скорпион"} for i in range(12)
+            ],
+        }
+        NatalChart.objects.create(
+            session=session,
+            birth_date=date(1993, 8, 21),
+            birth_time=time(9, 45),
+            birth_place="Москва",
+            status=NatalChart.Status.READY,
+            chart_data=natal,
+        )
+        self.order = Order.objects.create(
+            idempotency_key="isolate-key-0001",
+            idempotency_request_hash="e" * 64,
+            session=session,
+            waitlist_lead=lead,
+            user=self.user,
+            customer_email="isolate@example.com",
+            product_sku="personal_report",
+            product_name="Персональный разбор Cosmirror",
+            amount=Decimal("777.00"),
+            status=Order.Status.PAID,
+        )
+
+    def _run_with_boom(self, boom: str) -> list[str]:
+        from core.services import report_jobs
+        from core.services.report_jobs import generate_missing_interpretive_layers
+
+        report_jobs._section_inflight.clear()
+        called: list[str] = []
+
+        def make_section(name: str):
+            def _section(order, force=False):
+                called.append(name)
+                if name == boom:
+                    raise RuntimeError(f"unexpected {name}")
+                return {}
+
+            return _section
+
+        with (
+            patch("core.services.report.generate_natal_section", side_effect=make_section("natal")),
+            patch("core.services.report.generate_aspects_section", side_effect=make_section("aspects")),
+            patch("core.services.report.generate_cycles_section", side_effect=make_section("cycles")),
+            patch("core.services.report.generate_request_section", side_effect=make_section("request")),
+            patch("core.services.report.generate_practice_section", side_effect=make_section("practice")),
+        ):
+            generate_missing_interpretive_layers(self.order)
+        return called
+
+    def test_natal_raise_still_attempts_later_layers(self):
+        called = self._run_with_boom("natal")
+        self.assertEqual(called, ["natal", "aspects", "cycles", "request", "practice"])
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.interpretive["generation"]["status"], "done")
+        natal = self.order.interpretive["natal"]
+        self.assertEqual(natal["source"], "fallback")
+        self.assertIn("unexpected natal", natal.get("error") or "")
+
+    def test_aspects_raise_still_attempts_later_layers(self):
+        called = self._run_with_boom("aspects")
+        self.assertEqual(called, ["natal", "aspects", "cycles", "request", "practice"])
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.interpretive["aspects"]["source"], "fallback")
+        self.assertIn("unexpected aspects", self.order.interpretive["aspects"].get("error") or "")
+
+    def test_cycles_raise_still_attempts_later_layers(self):
+        called = self._run_with_boom("cycles")
+        self.assertEqual(called, ["natal", "aspects", "cycles", "request", "practice"])
+        self.order.refresh_from_db()
+        cycles = self.order.interpretive["cycles"]
+        self.assertEqual(cycles["source"], "fallback")
+        self.assertEqual(cycles.get("generation_status"), "generation_failed")
+
+    def test_request_raise_still_attempts_practice(self):
+        called = self._run_with_boom("request")
+        self.assertEqual(called, ["natal", "aspects", "cycles", "request", "practice"])
+        self.assertIn("practice", called)
+
+    @patch("core.services.llm_client.is_configured", return_value=True)
+    @patch(
+        "core.services.report.generate_natal_interpretation",
+        side_effect=RuntimeError("natal unexpected boom"),
+    )
+    @patch("core.services.report.generate_aspects_interpretation")
+    @patch("core.services.report.generate_cycles_interpretation")
+    @patch("core.services.report.generate_request_interpretation")
+    @patch("core.services.report.generate_practice_interpretation")
+    def test_layer_raise_get_shows_fallback_plus_later_llm(
+        self,
+        practice_interp,
+        request_interp,
+        cycles_interp,
+        aspects_interp,
+        _natal_interp,
+        _configured,
+    ):
+        from core.services import report_jobs
+        from core.services.report import build_paid_report
+        from core.services.report_jobs import generate_missing_interpretive_layers
+
+        report_jobs._section_inflight.clear()
+        aspects_interp.return_value = {
+            "ok": True,
+            "source": "llm",
+            "model": "test-model",
+            "error": "",
+            "payload": {
+                "report_type": "natal_aspects",
+                "source": "llm",
+                "intro": {"headline": "LLM aspects", "summary": "x" * 50},
+                "aspects": [
+                    {
+                        "aspect_id": "sun_conj_moon",
+                        "headline": "Mixed aspect after natal crash",
+                        "summary": "x" * 50,
+                    }
+                ],
+            },
+        }
+        cycles_interp.return_value = {
+            "ok": True,
+            "source": "llm",
+            "model": "test-model",
+            "error": "",
+            "generation_status": "generated",
+            "payload": {
+                "report_type": "current_cycles",
+                "source": "llm",
+                "period_overview": {"headline": "LLM cycles", "summary": "x" * 50},
+                "primary_cycles": [],
+                "secondary_cycles": [],
+            },
+        }
+        request_interp.return_value = {
+            "ok": True,
+            "source": "llm",
+            "model": "test-model",
+            "error": "",
+            "payload": {
+                "report_type": "request",
+                "source": "llm",
+                "request": {"title": "LLM request", "text": "x" * 50},
+            },
+        }
+        practice_interp.return_value = {
+            "ok": True,
+            "source": "llm",
+            "model": "test-model",
+            "error": "",
+            "payload": {
+                "report_type": "practice",
+                "source": "llm",
+                "start_here": {"headline": "LLM practice", "text": "x" * 50},
+            },
+        }
+
+        generate_missing_interpretive_layers(self.order)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.interpretive["generation"]["status"], "done")
+        self.assertEqual(self.order.interpretive["natal"]["source"], "fallback")
+        self.assertIn("natal unexpected boom", self.order.interpretive["natal"].get("error") or "")
+        for key in ("aspects", "cycles", "request", "practice"):
+            self.assertEqual(self.order.interpretive[key]["source"], "llm", key)
+        aspects_interp.assert_called()
+        cycles_interp.assert_called()
+        request_interp.assert_called()
+        practice_interp.assert_called()
+
+        interpretive = build_paid_report(self.order)["document"]["interpretive"]
+        # Crash record is source=fallback → GET ignores it as LLM overlay, uses live YAML.
+        self.assertEqual(interpretive["natal"]["source"], "fallback")
+        self.assertTrue(interpretive["natal"]["payload"]["core_portrait"]["headline"])
+        self.assertEqual(interpretive["aspects"]["source"], "llm")
+        self.assertEqual(
+            interpretive["aspects"]["payload"]["aspects"][0]["headline"],
+            "Mixed aspect after natal crash",
+        )
+        self.assertEqual(interpretive["cycles"]["source"], "llm")
+        self.assertEqual(interpretive["request"]["source"], "llm")
+        self.assertEqual(interpretive["practice"]["source"], "llm")
+
+    @patch("core.services.llm_client.is_configured", return_value=True)
+    @patch("core.services.report.generate_natal_interpretation")
+    @patch("core.services.report.generate_aspects_interpretation")
+    @patch("core.services.report.generate_cycles_interpretation")
+    @patch(
+        "core.services.report.generate_request_interpretation",
+        side_effect=RuntimeError("request unexpected boom"),
+    )
+    @patch("core.services.report.generate_practice_interpretation")
+    def test_request_raise_practice_uses_live_request_fallback(
+        self,
+        practice_interp,
+        _request_interp,
+        cycles_interp,
+        aspects_interp,
+        natal_interp,
+        _configured,
+    ):
+        from core.services import report_jobs
+        from core.services.report import build_paid_report
+        from core.services.report_jobs import generate_missing_interpretive_layers
+
+        report_jobs._section_inflight.clear()
+        practice_docs: list[dict] = []
+
+        natal_interp.return_value = {
+            "ok": True,
+            "source": "llm",
+            "model": "test-model",
+            "error": "",
+            "payload": {
+                "report_type": "natal",
+                "source": "llm",
+                "core_portrait": {"headline": "LLM natal", "summary": "x" * 50},
+            },
+        }
+        aspects_interp.return_value = {
+            "ok": True,
+            "source": "llm",
+            "model": "test-model",
+            "error": "",
+            "payload": {
+                "report_type": "natal_aspects",
+                "source": "llm",
+                "intro": {"headline": "LLM aspects", "summary": "x" * 50},
+                "aspects": [{"aspect_id": "a1", "headline": "A", "summary": "x" * 50}],
+            },
+        }
+        cycles_interp.return_value = {
+            "ok": True,
+            "source": "llm",
+            "model": "test-model",
+            "error": "",
+            "generation_status": "generated",
+            "payload": {
+                "report_type": "current_cycles",
+                "source": "llm",
+                "period_overview": {"headline": "LLM cycles", "summary": "x" * 50},
+                "primary_cycles": [],
+                "secondary_cycles": [],
+            },
+        }
+
+        def practice_side_effect(document):
+            practice_docs.append(document)
+            return {
+                "ok": True,
+                "source": "llm",
+                "model": "test-model",
+                "error": "",
+                "payload": {
+                    "report_type": "practice",
+                    "source": "llm",
+                    "start_here": {
+                        "headline": "Практика от live request fallback",
+                        "text": "x" * 50,
+                    },
+                },
+            }
+
+        practice_interp.side_effect = practice_side_effect
+        generate_missing_interpretive_layers(self.order)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.interpretive["request"]["source"], "fallback")
+        self.assertIn("request unexpected boom", self.order.interpretive["request"].get("error") or "")
+        self.assertEqual(self.order.interpretive["practice"]["source"], "llm")
+        self.assertTrue(practice_docs)
+        request_layer = (practice_docs[0].get("interpretive") or {}).get("request") or {}
+        self.assertEqual(request_layer.get("source"), "fallback")
+        request_payload = request_layer.get("payload") or {}
+        self.assertIsInstance(request_payload.get("request"), dict)
+        self.assertTrue(str((request_payload.get("request") or {}).get("text") or "").strip())
+
+        interpretive = build_paid_report(self.order)["document"]["interpretive"]
+        self.assertEqual(interpretive["request"]["source"], "fallback")
+        self.assertEqual(interpretive["practice"]["source"], "llm")
+        self.assertEqual(
+            interpretive["practice"]["payload"]["start_here"]["headline"],
+            "Практика от live request fallback",
+        )
+
+
 class PromptModelTests(TestCase):
     def tearDown(self):
         from core.services.llm_prompts import load_prompt_file
@@ -2611,7 +3121,6 @@ class YandexAuthTests(TestCase):
         me = self.client.get("/api/me/", HTTP_AUTHORIZATION=f"Bearer {data['token']}")
         self.assertEqual(me.status_code, 200)
         self.assertEqual(me.json()["email"], "ivan@yandex.ru")
-        self.assertEqual(me.json()["profile"]["display_name"], "Иван")
         self.assertFalse(me.json()["has_paid_report"])
         report = self.client.get(
             "/api/me/report/",
@@ -2844,6 +3353,154 @@ class YandexAuthTests(TestCase):
             HTTP_AUTHORIZATION=f"Bearer {data['token']}",
         )
         self.assertEqual(report.status_code, 404)
+
+
+def _fake_store_chart(chart):
+    from django.utils import timezone as dj_tz
+
+    chart.birth_place = chart.birth_place or "Москва"
+    chart.birth_lat = chart.birth_lat or Decimal("55.755826")
+    chart.birth_lng = chart.birth_lng or Decimal("37.6173")
+    chart.timezone = chart.timezone or "Europe/Moscow"
+    chart.status = NatalChart.Status.READY
+    chart.error_message = ""
+    chart.chart_data = {
+        "planets": {"sun": {"sign": "leo"}},
+        "has_birth_time": bool(chart.birth_time),
+        "location": {
+            "place": chart.birth_place,
+            "lat": float(chart.birth_lat),
+            "lng": float(chart.birth_lng),
+        },
+        "timezone": chart.timezone,
+    }
+    chart.calculated_at = dj_tz.now()
+    chart.save()
+    return chart
+
+
+class AccountCabinetTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+    def test_me_uses_given_name_not_email(self):
+        user, key = _make_user(email="anna@yandex.ru", yandex_id="7701")
+        user.first_name = "Анна"
+        user.save(update_fields=["first_name"])
+        user.profile.display_name = "Анна"
+        user.profile.save(update_fields=["display_name"])
+        OnboardingSession.objects.create(
+            user=user,
+            birth_date=date(1993, 8, 21),
+            birth_time=time(9, 45),
+            birth_place="Москва",
+        )
+        me = self.client.get("/api/me/", HTTP_AUTHORIZATION=f"Bearer {key}")
+        self.assertEqual(me.status_code, 200)
+        data = me.json()
+        self.assertEqual(data["email"], "anna@yandex.ru")
+        self.assertEqual(data["display_name"], "Анна")
+        self.assertEqual(data["profile"]["display_name"], "Анна")
+        self.assertEqual(data["birth"]["birth_date"], "1993-08-21")
+        self.assertEqual(data["birth"]["birth_time"], "09:45")
+        self.assertEqual(data["birth"]["birth_place"], "Москва")
+        self.assertEqual(data["profile"]["birth_date"], "1993-08-21")
+
+    @patch("core.services.account.calculate_and_store_chart", side_effect=_fake_store_chart)
+    def test_patch_birth_updates_profile_and_clears_report_layers(self, _mocked):
+        user, key = _make_user(email="anna@yandex.ru", yandex_id="7702")
+        session = OnboardingSession.objects.create(
+            user=user,
+            birth_date=date(1993, 8, 21),
+            birth_time=time(9, 45),
+            birth_place="Москва",
+        )
+        order = Order.objects.create(
+            idempotency_key="birth-edit-1",
+            idempotency_request_hash="e" * 64,
+            session=session,
+            user=user,
+            customer_email="anna@yandex.ru",
+            product_sku="personal_report",
+            product_name="Персональный разбор Cosmirror",
+            amount=Decimal("777.00"),
+            status=Order.Status.PAID,
+            interpretive={"natal": {"source": "llm"}, "generation": {"status": "done"}},
+        )
+        response = self.client.patch(
+            "/api/me/birth/",
+            {
+                "birth_date": "26.05.1995",
+                "birth_time": "19:25",
+                "birth_place": "Санкт-Петербург",
+                "birth_lat": "59.9386",
+                "birth_lng": "30.3141",
+                "timezone": "Europe/Moscow",
+            },
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {key}",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        data = response.json()
+        self.assertEqual(data["birth"]["birth_date"], "1995-05-26")
+        self.assertEqual(data["birth"]["birth_time"], "19:25")
+        self.assertEqual(data["birth"]["birth_place"], "Санкт-Петербург")
+        user.profile.refresh_from_db()
+        session.refresh_from_db()
+        order.refresh_from_db()
+        self.assertEqual(user.profile.birth_date, date(1995, 5, 26))
+        self.assertEqual(session.birth_date, date(1995, 5, 26))
+        self.assertEqual(session.birth_time, time(19, 25))
+        self.assertEqual(order.interpretive, {})
+
+    @patch("core.services.account.calculate_and_store_chart", side_effect=_fake_store_chart)
+    def test_patch_birth_can_clear_time(self, _mocked):
+        user, key = _make_user(email="anna@yandex.ru", yandex_id="7703")
+        session = OnboardingSession.objects.create(
+            user=user,
+            birth_date=date(1993, 8, 21),
+            birth_time=time(9, 45),
+            birth_place="Москва",
+        )
+        response = self.client.patch(
+            "/api/me/birth/",
+            {
+                "birth_date": "1993-08-21",
+                "unknown_time": True,
+                "birth_place": "Москва",
+                "birth_lat": "55.75",
+                "birth_lng": "37.61",
+                "timezone": "Europe/Moscow",
+            },
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {key}",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertFalse(response.json()["birth"]["has_birth_time"])
+        self.assertIsNone(response.json()["birth"]["birth_time"])
+        session.refresh_from_db()
+        self.assertIsNone(session.birth_time)
+
+    def test_delete_account_removes_user(self):
+        user, key = _make_user(email="gone@yandex.ru", yandex_id="7704")
+        session = OnboardingSession.objects.create(user=user)
+        Order.objects.create(
+            idempotency_key="delete-me-1",
+            idempotency_request_hash="f" * 64,
+            session=session,
+            user=user,
+            customer_email="gone@yandex.ru",
+            product_sku="personal_report",
+            product_name="Персональный разбор Cosmirror",
+            amount=Decimal("777.00"),
+            status=Order.Status.PAID,
+        )
+        WaitlistLead.objects.create(email="gone@yandex.ru", user=user)
+        response = self.client.delete("/api/me/", HTTP_AUTHORIZATION=f"Bearer {key}")
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(User.objects.filter(pk=user.pk).exists())
+        self.assertFalse(AuthToken.objects.filter(key=key).exists())
+        self.assertFalse(Order.objects.filter(idempotency_key="delete-me-1").exists())
+        self.assertFalse(WaitlistLead.objects.filter(email="gone@yandex.ru").exists())
 
 
 

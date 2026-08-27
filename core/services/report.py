@@ -70,57 +70,62 @@ def build_paid_report(order: Order) -> dict[str, Any]:
         quiz=quiz,
         person={},
     )
-    # Sealed LLM-слой отдаём только если провайдер включён.
-    # LLM_PROVIDER=off → всегда живой YAML-fallback (удобно для QA).
-    if llm_client.is_configured():
-        cached = cached_natal_layer(order, document)
-        if cached:
-            apply_natal_to_document(
-                document,
-                cached["payload"],
-                source=str(cached.get("source") or "llm"),
-                model=str(cached.get("model") or ""),
-            )
-        cached_aspects = cached_aspects_layer(order, document)
-        if cached_aspects:
-            apply_aspects_to_document(
-                document,
-                cached_aspects["payload"],
-                source=str(cached_aspects.get("source") or "llm"),
-                model=str(cached_aspects.get("model") or ""),
-            )
-        cached_cycles = cached_cycles_layer(order, document)
-        if cached_cycles:
-            apply_cycles_to_document(
-                document,
-                cached_cycles["payload"],
-                source=str(cached_cycles.get("source") or "llm"),
-                model=str(cached_cycles.get("model") or ""),
-                error=str(cached_cycles.get("error") or ""),
-                generation_status=str(cached_cycles.get("generation_status") or ""),
-            )
-        cached_request = cached_request_layer(order, document)
-        if cached_request:
-            apply_request_to_document(
-                document,
-                cached_request["payload"],
-                source=str(cached_request.get("source") or "llm"),
-                model=str(cached_request.get("model") or ""),
-                error=str(cached_request.get("error") or ""),
-            )
-        cached_practice = cached_practice_layer(order, document)
-        if cached_practice:
-            apply_practice_to_document(
-                document,
-                cached_practice["payload"],
-                source=str(cached_practice.get("source") or "llm"),
-                model=str(cached_practice.get("model") or ""),
-                error=str(cached_practice.get("error") or ""),
-            )
-        job = (order.interpretive or {}).get("generation") if isinstance(order.interpretive, dict) else None
-        if isinstance(job, dict):
-            interpretive = document.setdefault("interpretive", {})
-            interpretive["generation"] = {"status": str(job.get("status") or "idle")}
+    # LLM-first: valid persisted source=llm always overlays fallback shell.
+    # LLM_PROVIDER / is_configured only gates NEW LLM calls (kickoff/generate),
+    # not read of already sealed layers.
+    cached = cached_natal_layer(order, document)
+    if cached:
+        apply_natal_to_document(
+            document,
+            cached["payload"],
+            source=str(cached.get("source") or "llm"),
+            model=str(cached.get("model") or ""),
+            sealed=True,
+        )
+    cached_aspects = cached_aspects_layer(order, document)
+    if cached_aspects:
+        apply_aspects_to_document(
+            document,
+            cached_aspects["payload"],
+            source=str(cached_aspects.get("source") or "llm"),
+            model=str(cached_aspects.get("model") or ""),
+            sealed=True,
+        )
+    cached_cycles = cached_cycles_layer(order, document)
+    if cached_cycles:
+        apply_cycles_to_document(
+            document,
+            cached_cycles["payload"],
+            source=str(cached_cycles.get("source") or "llm"),
+            model=str(cached_cycles.get("model") or ""),
+            error=str(cached_cycles.get("error") or ""),
+            generation_status=str(cached_cycles.get("generation_status") or ""),
+            sealed=True,
+        )
+    cached_request = cached_request_layer(order, document)
+    if cached_request:
+        apply_request_to_document(
+            document,
+            cached_request["payload"],
+            source=str(cached_request.get("source") or "llm"),
+            model=str(cached_request.get("model") or ""),
+            error=str(cached_request.get("error") or ""),
+            sealed=True,
+        )
+    cached_practice = cached_practice_layer(order, document)
+    if cached_practice:
+        apply_practice_to_document(
+            document,
+            cached_practice["payload"],
+            source=str(cached_practice.get("source") or "llm"),
+            model=str(cached_practice.get("model") or ""),
+            error=str(cached_practice.get("error") or ""),
+            sealed=True,
+        )
+    job = (order.interpretive or {}).get("generation") if isinstance(order.interpretive, dict) else None
+    if isinstance(job, dict):
+        interpretive = document.setdefault("interpretive", {})
+        interpretive["generation"] = {"status": str(job.get("status") or "idle")}
     sections = flatten_document_sections(document)
     owner = _person_block(order, natal)
 

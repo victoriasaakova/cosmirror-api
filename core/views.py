@@ -62,6 +62,12 @@ from .services.prodamus import (
     parse_webhook_payload,
     verify_webhook,
 )
+from .services.account import (
+    BirthUpdateError,
+    birth_snapshot,
+    delete_user_account,
+    update_user_birth,
+)
 from .services.yandex_oauth import (
     YandexOAuthError,
     build_authorize_url,
@@ -69,6 +75,7 @@ from .services.yandex_oauth import (
     exchange_code,
     get_or_create_dev_user,
     issue_auth_token,
+    maybe_repair_display_name,
     resolve_redirect_uri,
 )
 
@@ -131,12 +138,49 @@ class MeView(APIView):
     authentication_classes = [BearerTokenAuthentication]
 
     def get(self, request):
+        maybe_repair_display_name(request.user)
         data = UserSerializer(request.user).data
         data["has_paid_report"] = _has_paid_report(request.user)
+        birth = birth_snapshot(request.user)
+        data["birth"] = birth
+        profile = data.get("profile")
+        if isinstance(profile, dict):
+            for key in (
+                "birth_date",
+                "birth_time",
+                "birth_place",
+                "birth_lat",
+                "birth_lng",
+                "timezone",
+            ):
+                if not profile.get(key) and birth.get(key):
+                    profile[key] = birth[key]
+            data["profile"] = profile
         if data["has_paid_report"]:
             from core.services.report_jobs import kickoff_paid_report_for_user
 
             kickoff_paid_report_for_user(request.user, retry_failed=False)
+        return Response(data)
+
+    def delete(self, request):
+        delete_user_account(request.user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class MeBirthView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
+
+    def patch(self, request):
+        raw = request.data if isinstance(request.data, dict) else {}
+        try:
+            birth = update_user_birth(request.user, raw)
+        except BirthUpdateError as exc:
+            return Response({exc.field: [exc.message]}, status=status.HTTP_400_BAD_REQUEST)
+        maybe_repair_display_name(request.user)
+        data = UserSerializer(request.user).data
+        data["has_paid_report"] = _has_paid_report(request.user)
+        data["birth"] = birth
         return Response(data)
 
 

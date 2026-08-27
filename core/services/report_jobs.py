@@ -196,6 +196,43 @@ def schedule_paid_report_generation(order_id: int, *, retry_failed: bool = False
     thread.start()
 
 
+def _persist_section_crash(order: Order, section: str, exc: BaseException) -> bool:
+    """
+    Записать section-local failure как soft LLM fail: source=fallback + error.
+    GET не overlay'ит такой record и собирает live YAML. False = order/DB precondition сломан.
+    """
+    try:
+        fresh = Order.objects.filter(pk=order.pk).first()
+        if fresh is None or fresh.status != Order.Status.PAID:
+            return False
+        order.interpretive = fresh.interpretive
+        store = order.interpretive if isinstance(order.interpretive, dict) else {}
+        existing = store.get(section)
+        if isinstance(existing, dict) and existing.get("source") == "llm":
+            return True
+
+        record: dict[str, Any] = {
+            "source": "fallback",
+            "status": "ready",
+            "model": "",
+            "error": str(exc) or exc.__class__.__name__,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            # Payload не используется как LLM overlay; GET пересоберёт live YAML.
+            "payload": (existing.get("payload") if isinstance(existing, dict) else None) or {},
+        }
+        if section == "cycles":
+            record["generation_status"] = "generation_failed"
+        save_interpretive_layer(order, section, record)
+        return True
+    except Exception:
+        logger.exception(
+            "Could not persist failure metadata for section %s order %s",
+            section,
+            order.pk,
+        )
+        return False
+
+
 def generate_missing_interpretive_layers(order: Order) -> None:
     """Синхронно дособрать слои. Для фона и тестов с моком LLM."""
     from core.services.report import (
@@ -206,19 +243,46 @@ def generate_missing_interpretive_layers(order: Order) -> None:
         generate_request_section,
     )
 
+    steps = (
+        ("natal", generate_natal_section),
+        ("aspects", generate_aspects_section),
+        ("cycles", generate_cycles_section),
+        ("request", generate_request_section),
+        ("practice", generate_practice_section),
+    )
+
     mark_generation_status(order, "running")
     try:
-        generate_natal_section(order, force=False)
-        order.refresh_from_db()
-        generate_aspects_section(order, force=False)
-        order.refresh_from_db()
-        generate_cycles_section(order, force=False)
-        order.refresh_from_db()
-        generate_request_section(order, force=False)
-        order.refresh_from_db()
-        generate_practice_section(order, force=False)
+        for section, generate in steps:
+            try:
+                generate(order, force=False)
+            except Exception as exc:
+                logger.exception(
+                    "Paid-report section %s raised for order %s; continuing remaining layers",
+                    section,
+                    order.pk,
+                )
+                if not _persist_section_crash(order, section, exc):
+                    logger.error(
+                        "Aborting remaining paid-report layers for order %s after fatal shared error on %s",
+                        order.pk,
+                        section,
+                    )
+                    break
+            try:
+                order.refresh_from_db()
+            except Exception:
+                logger.exception(
+                    "refresh_from_db failed for order %s after section %s; aborting remaining layers",
+                    order.pk,
+                    section,
+                )
+                break
     finally:
-        order.refresh_from_db()
+        try:
+            order.refresh_from_db()
+        except Exception:
+            logger.exception("Final refresh_from_db failed for order %s", order.pk)
         mark_generation_status(order, "done")
 
 

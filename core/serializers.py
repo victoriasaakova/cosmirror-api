@@ -60,6 +60,16 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = ("id", "username", "email", "first_name", "last_name", "profile")
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        from core.services.yandex_oauth import resolved_display_name
+
+        name = resolved_display_name(instance)
+        data["display_name"] = name
+        if data.get("profile") is not None:
+            data["profile"]["display_name"] = name
+        return data
+
 
 class JournalEntrySerializer(serializers.ModelSerializer):
     class Meta:

@@ -77,9 +77,13 @@ def apply_cycles_to_document(
     model: str = "",
     error: str = "",
     generation_status: str = "",
+    sealed: bool = False,
 ) -> dict[str, Any]:
     fallback = fallback_cycles_interpretation(document)
-    if source == "llm":
+    if sealed and source == "llm" and isinstance(payload, dict) and payload.get("report_type") == "current_cycles":
+        payload = {**payload, "source": "llm"}
+        generation_status = generation_status or "generated"
+    elif source == "llm":
         accepted = accept_generated_cycles(payload, fallback)
         if accepted is None:
             source = "fallback"

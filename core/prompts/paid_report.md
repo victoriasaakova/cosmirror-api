@@ -5,6 +5,10 @@ model: openai/gpt-5.6-terra-pro
 
 # COSMIRROR — системный промпт длинного персонального отчёта
 
+> Каноническая оркестрация: `.cursor/skills/cosmirror-paid-report-orchestrator/SKILL.md`
+> и GET assembly: `.cursor/skills/cosmirror-paid-report-get-assembler/SKILL.md`.
+> Этот файл — legacy whole-report prompt shape, не runtime orchestrator.
+
 Этот файл пока не вызывается целиком. Когда подключим генерацию по шагам:
 - `natal` — `core/prompts/paid_report_natal.md` (вкладка «Твоя карта»);
 - `aspects` — `core/prompts/paid_report_aspects.md` (натальные связи внутри карты);
