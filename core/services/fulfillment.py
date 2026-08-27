@@ -40,6 +40,10 @@ def deliver_paid_order(order: Order, *, force: bool = False, allow_unpaid_demo: 
     if order.fulfilled_at and not force:
         return False
 
+    from core.services.report_jobs import kickoff_paid_report_for_order
+
+    kickoff_paid_report_for_order(order, retry_failed=True)
+
     report = build_paid_report(order)
     pdf = render_report_pdf(report)
     page_url = report_page_url(order)

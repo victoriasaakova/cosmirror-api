@@ -6,9 +6,18 @@ LLM здесь не вызывается. `generation.payload` — то, что 
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
+from core.services.llm_prompts import (
+    PROMPT_PAID_REPORT,
+    PROMPT_PAID_REPORT_ASPECTS,
+    PROMPT_PAID_REPORT_CYCLES,
+    PROMPT_PAID_REPORT_NATAL,
+    PROMPT_PAID_REPORT_PRACTICE,
+    PROMPT_PAID_REPORT_REQUEST,
+    load_prompt,
+    resolve_model,
+)
 from core.services.report_accents import quiz_profile, select_accents
 from core.services.report_facts import (
     chart_wheel,
@@ -19,24 +28,29 @@ from core.services.report_facts import (
     natal_table,
     transits_now,
 )
-from core.services.report_lexicon import WORK_WITH
+from core.services.report_lexicon import WORK_WITH, natal_aspect_sentence
+from core.services.report_aspects import apply_aspects_to_document, fallback_aspects_interpretation
+from core.services.report_cycles import apply_cycles_to_document, fallback_cycles_interpretation
+from core.services.report_natal import apply_natal_to_document, fallback_natal_interpretation
+from core.services.report_practice import apply_practice_to_document, fallback_practice_interpretation
+from core.services.report_request import apply_request_to_document, fallback_request_interpretation
 from core.services.report_types import (
     PDF_OUTLINE,
     SCHEMA_VERSION,
+    SECTION_ASPECTS,
     SECTION_CYCLES,
     SECTION_NATAL,
+    SECTION_PRACTICE,
     SECTION_REQUEST,
-    SECTION_SUMMARY,
     SYSTEM_PROMPT_ID,
     WEB_TABS,
 )
 
-_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "paid_report.md"
 _CORE = ("sun", "moon", "ascendant")
 
 
 def load_paid_report_prompt() -> str:
-    return _PROMPT_PATH.read_text(encoding="utf-8")
+    return load_prompt(PROMPT_PAID_REPORT).body.strip() + "\n"
 
 
 def build_report_document(
@@ -76,6 +90,45 @@ def build_report_document(
         "method": method,
     }
     sections = _section_shells(profile, accents, factual)
+    document_shell = {
+        "factual": factual,
+        "sections": sections,
+        "interpretive": {},
+        "quiz": profile,
+        "accents": accents,
+    }
+    apply_natal_to_document(
+        document_shell,
+        fallback_natal_interpretation(document_shell),
+        source="fallback",
+        model="",
+    )
+    apply_aspects_to_document(
+        document_shell,
+        fallback_aspects_interpretation(document_shell),
+        source="fallback",
+        model="",
+    )
+    apply_cycles_to_document(
+        document_shell,
+        fallback_cycles_interpretation(document_shell),
+        source="fallback",
+        model="",
+    )
+    apply_request_to_document(
+        document_shell,
+        fallback_request_interpretation(document_shell),
+        source="fallback",
+        model="",
+    )
+    apply_practice_to_document(
+        document_shell,
+        fallback_practice_interpretation(document_shell),
+        source="fallback",
+        model="",
+    )
+    sections = document_shell["sections"]
+    interpretive_layer = document_shell["interpretive"]
     payload = build_generation_payload(
         person=person or {},
         profile=profile,
@@ -99,8 +152,13 @@ def build_report_document(
             "rules_applied": accents["rules_applied"],
         },
         "interpretive": {
-            "status": "pending_llm",
+            "status": interpretive_layer.get("status") or "fallback",
             "system_prompt_id": SYSTEM_PROMPT_ID,
+            "natal": interpretive_layer.get("natal"),
+            "aspects": interpretive_layer.get("aspects"),
+            "cycles": interpretive_layer.get("cycles"),
+            "request": interpretive_layer.get("request"),
+            "practice": interpretive_layer.get("practice"),
             "sections": {
                 key: {**row, "body": "", "questions": row.get("questions") or []}
                 for key, row in sections.items()
@@ -114,6 +172,29 @@ def build_report_document(
             "status": "payload_ready",
             "system_prompt_id": SYSTEM_PROMPT_ID,
             "system_prompt_path": "core/prompts/paid_report.md",
+            "model": resolve_model(SYSTEM_PROMPT_ID),
+            "section_prompts": {
+                SECTION_NATAL: _section_prompt(
+                    PROMPT_PAID_REPORT_NATAL,
+                    "core/prompts/paid_report_natal.md",
+                ),
+                SECTION_ASPECTS: _section_prompt(
+                    PROMPT_PAID_REPORT_ASPECTS,
+                    "core/prompts/paid_report_aspects.md",
+                ),
+                SECTION_CYCLES: _section_prompt(
+                    PROMPT_PAID_REPORT_CYCLES,
+                    "core/prompts/paid_report_cycles.md",
+                ),
+                SECTION_REQUEST: _section_prompt(
+                    PROMPT_PAID_REPORT_REQUEST,
+                    "core/prompts/paid_report_request.md",
+                ),
+                SECTION_PRACTICE: _section_prompt(
+                    PROMPT_PAID_REPORT_PRACTICE,
+                    "core/prompts/paid_report_practice.md",
+                ),
+            },
             "payload": payload,
         },
         "sections": sections,
@@ -176,11 +257,37 @@ def build_generation_payload(
         "output": {
             "sections": {
                 SECTION_NATAL: ["portrait", "sun_moon_asc", "houses", "placements"],
+                SECTION_ASPECTS: ["tension", "support", "how_they_work"],
                 SECTION_CYCLES: ["pressure", "resource", "how_to_work"],
-                SECTION_REQUEST: ["link", "how_to_work", "why_now"],
-                SECTION_SUMMARY: ["now", "next"],
+                SECTION_REQUEST: [
+                    "request",
+                    "connections",
+                    "core_distinction",
+                    "resource",
+                    "takeaway",
+                ],
+                SECTION_PRACTICE: [
+                    "start_here",
+                    "pattern",
+                    "protective_function",
+                    "cost",
+                    "key_distinctions",
+                    "values",
+                    "reflection_questions",
+                    "experiment",
+                    "observe_over_time",
+                    "user_takeaway",
+                ],
             }
         },
+    }
+
+
+def _section_prompt(prompt_id: str, path: str) -> dict[str, str]:
+    return {
+        "system_prompt_id": prompt_id,
+        "system_prompt_path": path,
+        "model": resolve_model(prompt_id),
     }
 
 
@@ -299,7 +406,7 @@ def _section_shells(
         house = f" · дом {row['house']}" if row.get("house") else ""
         natal_blocks.append(
             {
-                "title": f"{row['name']} в {row['sign_ru']}{house}",
+                "title": f"{row['name']} · {row['sign_ru']}{house}",
                 "text": row["fact"],
             }
         )
@@ -309,13 +416,22 @@ def _section_shells(
         natal_blocks.append(
             {
                 "title": f"{house['house']}-й дом · {house['sign_ru']}",
-                "text": f"{house['theme']}.{who_text}",
+                "text": f"{house['theme']}{who_text}",
             }
         )
 
+    aspect_blocks = _aspect_blocks(factual["natal"].get("aspects") or [])
     pressure_blocks = [_cycle_block(row) for row in (accents.get("pressure") or [])]
     resource_blocks = [_cycle_block(row) for row in (accents.get("resource") or [])]
-    cycle_blocks: list[dict[str, str]] = []
+    cycle_blocks: list[dict[str, str]] = [
+        {
+            "title": "Что звучит сейчас",
+            "text": (
+                "Это внешнее небо к уже посчитанной карте: транзиты, окна, трение и канал. "
+                "Не путать с натальными аспектами — те живут во вкладке «Аспекты»."
+            ),
+        }
+    ]
     if pressure_blocks:
         cycle_blocks.append(
             {
@@ -332,16 +448,16 @@ def _section_shells(
             }
         )
         cycle_blocks.extend(resource_blocks)
-    if not cycle_blocks:
+    if not pressure_blocks and not resource_blocks:
         cycle_blocks.append(
             {
                 "title": "Текущие циклы",
-                "text": "Значимых персональных аспектов в текущем орбе нет. Общий фон внешних планет всё равно задаёт климат — смотри, где ты уже реагируешь сильнее обычного.",
+                "text": "Значимых персональных транзитов в текущем орбе нет. Общий фон внешних планет всё равно задаёт климат — смотри, где ты уже реагируешь сильнее обычного.",
             }
         )
 
     request_blocks = _request_blocks(profile, accents)
-    summary_blocks = _summary_blocks(accents, factual)
+    practice_blocks = _practice_shell_blocks(profile)
 
     return {
         SECTION_NATAL: {
@@ -350,9 +466,15 @@ def _section_shells(
             "layer": "factual",
             "blocks": natal_blocks,
         },
+        SECTION_ASPECTS: {
+            "id": SECTION_ASPECTS,
+            "title": "Аспекты",
+            "layer": "factual",
+            "blocks": aspect_blocks,
+        },
         SECTION_CYCLES: {
             "id": SECTION_CYCLES,
-            "title": "Аспекты и циклы",
+            "title": "Циклы",
             "layer": "factual",
             "blocks": cycle_blocks,
         },
@@ -361,20 +483,80 @@ def _section_shells(
             "title": "Запрос",
             "layer": "factual",
             "blocks": request_blocks,
-            "questions": _practice_questions(profile),
         },
-        SECTION_SUMMARY: {
-            "id": SECTION_SUMMARY,
-            "title": "Саммари",
+        SECTION_PRACTICE: {
+            "id": SECTION_PRACTICE,
+            "title": "Практика",
             "layer": "factual",
-            "blocks": summary_blocks,
+            "blocks": practice_blocks,
+            "questions": _practice_questions(profile),
         },
     }
 
 
+def _aspect_card(row: dict[str, Any]) -> dict[str, str]:
+    return {
+        "title": (
+            f"{row.get('a_name')} · {row.get('aspect_ru')} · "
+            f"{row.get('b_name')} · {row.get('orb')}°"
+        ),
+        "text": natal_aspect_sentence(
+            str(row.get("a") or ""),
+            str(row.get("aspect") or ""),
+            str(row.get("aspect_ru") or ""),
+            str(row.get("b") or ""),
+        ),
+        "kind": str(row.get("kind") or ""),
+        "aspect": str(row.get("aspect") or ""),
+    }
+
+
+def _aspect_blocks(hits: list[dict[str, Any]]) -> list[dict[str, str]]:
+    blocks: list[dict[str, str]] = [
+        {
+            "title": "Как темы связаны внутри",
+            "text": (
+                "Это не текущее небо и не прогноз. "
+                "Аспект — как две темы в тебе уже связаны: трение, поддержка, растяжка или слияние. "
+                "Узнаёшь связку в жизни — бери. Не узнаёшь — это тоже ответ."
+            ),
+        }
+    ]
+    if not hits:
+        blocks.append(
+            {
+                "title": "Натальные аспекты",
+                "text": "В текущем расчёте тесных натальных аспектов нет — смотри положения и дома.",
+            }
+        )
+        return blocks
+
+    hard = [row for row in hits if row.get("kind") == "hard"]
+    soft = [row for row in hits if row.get("kind") != "hard"]
+    if hard:
+        blocks.append(
+            {
+                "title": "Трение",
+                "text": "Жёсткие аспекты: темы сталкиваются и просят честного выбора. Не «плохо» — громче.",
+            }
+        )
+        blocks.extend(_aspect_card(row) for row in hard)
+    if soft:
+        blocks.append(
+            {
+                "title": "Поддержка",
+                "text": (
+                    "Мягкие аспекты: есть рабочий канал. Не «удача» — привычное русло, "
+                    "которым можно пользоваться."
+                ),
+            }
+        )
+        blocks.extend(_aspect_card(row) for row in soft)
+    return blocks
+
+
 def _request_blocks(profile: dict[str, Any], accents: dict[str, Any]) -> list[dict[str, str]]:
     focus_labels = ", ".join(profile.get("focus_labels") or []) or "жизнь"
-    stage = profile.get("life_stage_label") or "не указан"
     intent = profile.get("intent_label") or profile.get("astrology_trigger_label") or "понять, что происходит"
     line = accents.get("through_line")
     primary = (accents.get("primary") or [None])[0]
@@ -384,7 +566,7 @@ def _request_blocks(profile: dict[str, Any], accents: dict[str, Any]) -> list[di
 
     intro = (
         f"В онбординге ты отметила фокус: {focus_labels}. "
-        f"Сезон жизни: {stage}. Запрос к астрологии: {intent}. "
+        f"Запрос к астрологии: {intent}. "
         "Карта не отвечает на вопрос «что случится». Она показывает, какие темы сейчас громче — "
         "и почему именно этот запрос мог выйти на поверхность."
     )
@@ -433,7 +615,7 @@ def _request_blocks(profile: dict[str, Any], accents: dict[str, Any]) -> list[di
 
     why = (
         f"Такой запрос часто появляется, когда внешний цикл задевает ту же тему, что уже зрела внутри. "
-        f"Сейчас в фокусе {focus_labels}, а сезон жизни — {stage}. "
+        f"Сейчас в фокусе {focus_labels}, запрос — {intent}. "
         "Цикл не «создаёт» вопрос из воздуха: он делает его слышнее. "
         "Имеет смысл использовать этот момент, чтобы отличить своё желание от привычки держаться за знакомое — "
         "и сделать один маленький честный шаг, а не большое судьбоносное решение."
@@ -501,6 +683,23 @@ def _summary_blocks(accents: dict[str, Any], factual: dict[str, Any]) -> list[di
             "title": "Что будет дальше",
             "text": " ".join(next_parts)
             + " Это ориентиры по орбу и скорости, не даты событий.",
+        },
+    ]
+
+
+def _practice_shell_blocks(profile: dict[str, Any]) -> list[dict[str, str]]:
+    questions = _practice_questions(profile)
+    return [
+        {
+            "title": "С чего начать",
+            "text": (
+                "После вкладок карты, аспектов, циклов и запроса здесь — "
+                "практическая самостоятельная работа с найденной темой."
+            ),
+        },
+        {
+            "title": "Вопросы для наблюдения",
+            "text": "\n".join(f"• {q}" for q in questions),
         },
     ]
 

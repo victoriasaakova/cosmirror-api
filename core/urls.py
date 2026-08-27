@@ -15,7 +15,25 @@ urlpatterns = [
         views.YandexAuthCallbackView.as_view(),
         name="auth-yandex-callback",
     ),
+    path("auth/logout/", views.AuthLogoutView.as_view(), name="auth-logout"),
+    path("auth/dev-login/", views.AuthDevLoginView.as_view(), name="auth-dev-login"),
+    path("me/dev-reset/", views.MeDevResetView.as_view(), name="me-dev-reset"),
     path("me/report/", views.MeReportView.as_view(), name="me-report"),
+    path(
+        "me/report/natal/generate/",
+        views.MeReportNatalGenerateView.as_view(),
+        name="me-report-natal-generate",
+    ),
+    path(
+        "me/report/aspects/generate/",
+        views.MeReportAspectsGenerateView.as_view(),
+        name="me-report-aspects-generate",
+    ),
+    path(
+        "me/report/cycles/generate/",
+        views.MeReportCyclesGenerateView.as_view(),
+        name="me-report-cycles-generate",
+    ),
     path("me/report.pdf/", views.MeReportPdfView.as_view(), name="me-report-pdf"),
     path("me/report/email/", views.MeReportEmailView.as_view(), name="me-report-email"),
     path(

@@ -1,17 +1,13 @@
 """
-Натальный расчёт — фасад над движками эфемерид.
+Натальный расчёт — фасад.
 
-Движки:
-- swiss   → Swiss Ephemeris (pyswisseph) — по умолчанию
-- skyfield → Skyfield + NASA JPL de421.bsp
-
-Переключение: ASTRO_ENGINE=swiss|skyfield в .env
+Натальная карта и текущее небо для отчёта считаются только через Swiss Ephemeris.
+Skyfield остаётся в этом модуле для демо-сравнения, не для прод-карты.
 """
 
 from __future__ import annotations
 
 import math
-import os
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from pathlib import Path
@@ -176,21 +172,16 @@ def _calculate_sky_now_skyfield(when: Optional[datetime] = None) -> dict[str, An
 # --- facade --------------------------------------------------------------
 
 def active_engine() -> str:
-    """swiss | skyfield"""
-    raw = (os.getenv("ASTRO_ENGINE") or "swiss").strip().lower()
-    if raw in ("skyfield", "nasa", "de421", "skyfield_de421"):
-        return "skyfield"
+    """Натал всегда Swiss Ephemeris (Skill 01). Skyfield не участвует в карте."""
     return "swiss"
 
 
 def calculate_positions(dt_utc: datetime) -> dict[str, dict[str, Any]]:
     """Публичный хелпер: положения планет на момент UTC."""
-    if active_engine() == "skyfield":
-        if dt_utc.tzinfo is None:
-            dt_utc = dt_utc.replace(tzinfo=timezone.utc)
-        return _planet_longitudes_skyfield(dt_utc.astimezone(timezone.utc))
     from core.services import swiss_engine
 
+    if dt_utc.tzinfo is None:
+        dt_utc = dt_utc.replace(tzinfo=timezone.utc)
     return swiss_engine.calculate_positions(dt_utc)
 
 
@@ -207,16 +198,8 @@ def calculate_natal(
     Основной расчёт натала.
 
     Без времени: планеты на полдень local, Asc/дома не отдаём.
+    Натал всегда Swiss Ephemeris — ASTRO_ENGINE больше не переключает карту.
     """
-    if active_engine() == "skyfield":
-        return _calculate_natal_skyfield(
-            birth_date=birth_date,
-            birth_time=birth_time,
-            latitude=latitude,
-            longitude=longitude,
-            timezone_name=timezone_name,
-            place=place,
-        )
     from core.services import swiss_engine
 
     return swiss_engine.calculate_natal(
@@ -230,9 +213,7 @@ def calculate_natal(
 
 
 def calculate_sky_now(when: Optional[datetime] = None) -> dict[str, Any]:
-    """Текущие положения планет (для циклов на онбординге)."""
-    if active_engine() == "skyfield":
-        return _calculate_sky_now_skyfield(when)
+    """Текущие положения планет (для циклов на онбординге). Всегда Swiss."""
     from core.services import swiss_engine
 
     return swiss_engine.calculate_sky_now(when)

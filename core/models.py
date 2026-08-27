@@ -2,6 +2,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class Profile(models.Model):
@@ -457,6 +458,11 @@ class Order(models.Model):
     fulfilled_at = models.DateTimeField("Отчёт отправлен", null=True, blank=True)
     fulfillment_error = models.TextField("Ошибка отправки отчёта", blank=True)
     webhook_payload = models.JSONField("Последний webhook", default=dict, blank=True)
+    interpretive = models.JSONField(
+        "Слои интерпретации (натал / аспекты / циклы)",
+        default=dict,
+        blank=True,
+    )
     last_error = models.TextField("Последняя ошибка", blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -484,14 +490,19 @@ class AuthToken(models.Model):
         related_name="auth_tokens",
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField("Истекает")
 
     class Meta:
         verbose_name = "Токен входа"
         verbose_name_plural = "Токены входа"
         ordering = ["-created_at"]
 
-    def __str__(self) -> str:
+    def __str__(self):
         return f"{self.user_id} · {self.key[:8]}"
+
+    @property
+    def is_expired(self) -> bool:
+        return timezone.now() >= self.expires_at
 
 
 class YandexOAuthState(models.Model):

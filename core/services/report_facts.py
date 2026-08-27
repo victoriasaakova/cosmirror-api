@@ -19,11 +19,13 @@ from core.services.report_lexicon import (
     SIGN_THEME,
     aspect_sentence,
     cycle_copy,
+    natal_aspect_sentence,
     placement_sentence,
 )
 from core.services.report_types import (
     ANGLE_ORDER,
     ASPECTS,
+    ENGINE_ANGLE_IDS,
     NATAL_ORB,
     PLANET_GLYPH,
     PLANET_ORDER,
@@ -34,6 +36,11 @@ from core.services.report_types import (
     POLARITY_RU,
     TRANSIT_ORB,
     TRANSIT_PLANET_WEIGHT,
+    WHEEL_ASPECT_BODIES,
+    WHEEL_ASPECT_KINDS,
+    WHEEL_ASPECT_MAX_ORB,
+    WHEEL_ASPECT_OUTER,
+    WHEEL_BODY_ORDER,
 )
 
 
@@ -122,6 +129,7 @@ def natal_table(natal: dict[str, Any]) -> list[dict[str, Any]]:
                 "sign": sign,
                 "sign_ru": sign_ru,
                 "degree": block.get("degree"),
+                "minute": block.get("minute"),
                 "longitude": block.get("longitude"),
                 "house": house,
                 "house_theme": HOUSE_THEME.get(int(house), "") if house else "",
@@ -137,10 +145,59 @@ def natal_table(natal: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _report_point_id(raw: str) -> str:
+    return ENGINE_ANGLE_IDS.get(raw, raw)
+
+
+def _is_pattern_wheel_aspect(a: str, b: str, aspect: str, orb: float) -> bool:
+    """Какие линии рисуем на колесе — как в The Pattern, не все рассчитанные аспекты."""
+    if a not in WHEEL_ASPECT_BODIES or b not in WHEEL_ASPECT_BODIES:
+        return False
+    if aspect not in WHEEL_ASPECT_KINDS:
+        return False
+    if a in WHEEL_ASPECT_OUTER and b in WHEEL_ASPECT_OUTER:
+        return False
+    return float(orb) <= float(WHEEL_ASPECT_MAX_ORB.get(aspect, 0.0))
+
+
 def natal_aspects(natal: dict[str, Any]) -> list[dict[str, Any]]:
+    engine_rows = natal.get("aspects") if isinstance(natal.get("aspects"), list) else []
+    if engine_rows and isinstance(engine_rows[0], dict) and engine_rows[0].get("body_a"):
+        found: list[dict[str, Any]] = []
+        for row in engine_rows:
+            a = _report_point_id(str(row.get("body_a") or ""))
+            b = _report_point_id(str(row.get("body_b") or ""))
+            aspect = str(row.get("aspect") or "")
+            meta = next((item for item in ASPECTS if item["key"] == aspect), None)
+            if not a or not b or not meta:
+                continue
+            if a not in PLANET_ORDER and a not in ANGLE_ORDER:
+                continue
+            if b not in PLANET_ORDER and b not in ANGLE_ORDER:
+                continue
+            found.append(
+                {
+                    "id": f"natal_{a}_{aspect}_{b}",
+                    "a": a,
+                    "b": b,
+                    "a_name": PLANET_RU.get(a, a),
+                    "b_name": PLANET_RU.get(b, b),
+                    "aspect": aspect,
+                    "aspect_ru": meta["ru"],
+                    "kind": meta["kind"],
+                    "orb": round(float(row.get("orb") or 0), 2),
+                    "applying": bool(row.get("applying")),
+                    "theme": ASPECT_THEME[aspect],
+                    "fact": natal_aspect_sentence(a, aspect, meta["ru"], b),
+                    "scope": "natal",
+                }
+            )
+        found.sort(key=lambda row: (float(row["orb"]), str(row["id"])))
+        return found
+
     points = natal_points(natal)
     keys = list(points.keys())
-    found: list[dict[str, Any]] = []
+    found = []
     for i, a in enumerate(keys):
         for b in keys[i + 1 :]:
             lon_a = float(points[a]["longitude"])
@@ -161,6 +218,7 @@ def natal_aspects(natal: dict[str, Any]) -> list[dict[str, Any]]:
                     "kind": hit["kind"],
                     "orb": hit["orb"],
                     "theme": ASPECT_THEME[hit["key"]],
+                    "fact": natal_aspect_sentence(a, hit["key"], hit["ru"], b),
                     "scope": "natal",
                 }
             )
@@ -286,23 +344,31 @@ def houses_table(natal: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def chart_wheel(natal: dict[str, Any], aspects: list[dict[str, Any]]) -> dict[str, Any]:
-    """Данные для круглой карты: ASC слева, как в классической космограмме GeoCult."""
+    """Данные для SVG-колеса: ASC слева, долготы из Swiss Ephemeris без интерпретации."""
+    stored = natal.get("planets") if isinstance(natal.get("planets"), dict) else {}
     points = natal_points(natal)
-    asc = points.get("ascendant")
-    mc = points.get("midheaven")
-    asc_lon = float(asc["longitude"]) if asc else 0.0
+    asc = natal.get("ascendant") or (natal.get("angles") or {}).get("asc") or points.get("ascendant")
+    mc = natal.get("midheaven") or (natal.get("angles") or {}).get("mc") or points.get("midheaven")
+    dsc = natal.get("descendant") or (natal.get("angles") or {}).get("dsc")
+    ic = natal.get("ic") or (natal.get("angles") or {}).get("ic")
+    asc_lon = float(longitude_of(asc) or 0.0)
+
     planets = []
-    for key in PLANET_ORDER:
-        block = points.get(key)
-        if not block:
+    for key in WHEEL_BODY_ORDER:
+        block = stored.get(key) or points.get(key)
+        lon = longitude_of(block) if isinstance(block, dict) else None
+        if lon is None:
             continue
         planets.append(
             {
                 "key": key,
                 "name": PLANET_RU.get(key, key),
                 "glyph": PLANET_GLYPH.get(key, ""),
-                "longitude": float(block["longitude"]),
+                "longitude": lon,
+                "sign": block.get("sign"),
                 "sign_ru": block.get("sign_ru"),
+                "degree": block.get("degree"),
+                "minute": block.get("minute"),
                 "house": block.get("house"),
                 "retrograde": bool(block.get("retrograde")),
             }
@@ -318,24 +384,46 @@ def chart_wheel(natal: dict[str, Any], aspects: list[dict[str, Any]]) -> dict[st
                 "sign_ru": row.get("sign_ru") or "",
             }
         )
-    lines = [
-        {
-            "a": row["a"],
-            "b": row["b"],
-            "kind": row["kind"],
-            "aspect": row["aspect"],
-        }
-        for row in aspects
-        if row.get("a") in PLANET_ORDER and row.get("b") in PLANET_ORDER
-    ]
+    engine_aspects = natal.get("aspects") if isinstance(natal.get("aspects"), list) else []
+    if engine_aspects and isinstance(engine_aspects[0], dict) and engine_aspects[0].get("body_a"):
+        raw_lines = []
+        for row in engine_aspects:
+            a = _report_point_id(str(row.get("body_a") or ""))
+            b = _report_point_id(str(row.get("body_b") or ""))
+            aspect = str(row.get("aspect") or "")
+            orb = float(row.get("orb") or 0)
+            meta = next((item for item in ASPECTS if item["key"] == aspect), None)
+            if not meta or not _is_pattern_wheel_aspect(a, b, aspect, orb):
+                continue
+            raw_lines.append({"a": a, "b": b, "kind": meta["kind"], "aspect": aspect, "orb": round(orb, 2)})
+        lines = raw_lines
+    else:
+        lines = [
+            {
+                "a": row["a"],
+                "b": row["b"],
+                "kind": row["kind"],
+                "aspect": row["aspect"],
+                "orb": row.get("orb"),
+            }
+            for row in aspects
+            if _is_pattern_wheel_aspect(
+                str(row.get("a") or ""),
+                str(row.get("b") or ""),
+                str(row.get("aspect") or ""),
+                float(row.get("orb") or 0),
+            )
+        ]
     return {
         "ascendant_longitude": asc_lon,
-        "mc_longitude": float(mc["longitude"]) if mc else None,
+        "mc_longitude": float(longitude_of(mc)) if isinstance(mc, dict) and longitude_of(mc) is not None else None,
+        "dsc_longitude": float(longitude_of(dsc)) if isinstance(dsc, dict) and longitude_of(dsc) is not None else None,
+        "ic_longitude": float(longitude_of(ic)) if isinstance(ic, dict) and longitude_of(ic) is not None else None,
         "has_birth_time": bool(natal.get("has_birth_time")),
         "house_system": natal.get("house_system") or "placidus",
         "planets": planets,
         "houses": houses,
-        "aspects": lines[:18],
+        "aspects": lines,
         "signs": [
             {"sign": SIGNS[i], "sign_ru": SIGNS_RU[SIGNS[i]], "start": i * 30}
             for i in range(12)

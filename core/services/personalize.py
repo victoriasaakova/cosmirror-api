@@ -65,6 +65,7 @@ SYSTEM_PROMPT = f"""\
 - Язык: русский.
 - Тон: спокойный, взрослый; без прогнозов, гарантий и медицинских диагнозов.
 - Обращение на «ты». Имя в opening/body НЕ пиши — его покажут отдельно.
+- Грамматический род: quiz.gender female → женский; male → мужской; иначе нейтрально, без мужского по умолчанию.
 - Натальные данные (Солнце/Луна/Асцендент) — только внутренний контекст для тебя.
   ЗАПРЕЩЕНО в body, product_pitch, opening.insight, outcomes, offer.text: конструкции
   «Солнце в …», «Луна в …», «Асцендент в …», перечисления знаков и «карта говорит».
@@ -322,10 +323,11 @@ def _title_to_insight_clause(title: str) -> str:
     low = t.lower()
     replacements = {
         "тяга выйти из тесной роли": "пора выйти из тесной роли",
-        "эмоциональная нагрузка цикла": "важно беречь эмоциональные границы",
-        "что может отзываться сейчас": "важно замедлиться и прислушаться к себе",
+        "эмоциональная нагрузка цикла": "беречь эмоциональные границы",
+        "что может отзываться сейчас": "замедлиться и прислушаться к себе",
         "размытие и чувствительность": "легко потерять ясность — стоит чаще сверяться с собой",
         "глубинная перестройка": "назрела внутренняя перестройка",
+        "где жизнь просит шире": "уже тесно в привычном масштабе",
         "что имеет смысл наблюдать": "стоит внимательнее смотреть на свои автоматические реакции",
     }
     if low in replacements:
@@ -338,6 +340,15 @@ def _title_to_insight_clause(title: str) -> str:
     return t[0].lower() + t[1:] if t else "пора прислушаться к себе"
 
 
+def _fit_clause_to_bridge(bridge: str, clause: str) -> str:
+    """Не дублировать хвост связки: «сейчас важно важно беречь…»."""
+    tail = bridge.strip().lower().split()[-1] if bridge.strip() else ""
+    words = clause.strip().split()
+    if tail and words and words[0].lower().rstrip(".,!") == tail:
+        return " ".join(words[1:]).strip() or clause.strip()
+    return clause.strip()
+
+
 def default_opening(quiz: dict[str, Any], influences: list[dict[str, Any]]) -> dict[str, str]:
     seed = abs(hash(str(quiz.get("name") or "") + str(quiz.get("intent") or "")))
     bridge = OPENING_BRIDGES[seed % len(OPENING_BRIDGES)]
@@ -345,7 +356,7 @@ def default_opening(quiz: dict[str, Any], influences: list[dict[str, Any]]) -> d
     title = str(primary.get("title") or "").strip()
     return {
         "bridge": bridge,
-        "insight": _title_to_insight_clause(title),
+        "insight": _fit_clause_to_bridge(bridge, _title_to_insight_clause(title)),
     }
 
 
@@ -505,7 +516,11 @@ def _call_llm(
         "Экран 3: outcomes.cards (что поймёшь после разбора).\n\n"
         + json.dumps(payload, ensure_ascii=False)
     )
-    return llm_client.chat_json(system=SYSTEM_PROMPT, user=user)
+    return llm_client.chat_json(
+        system=SYSTEM_PROMPT,
+        user=user,
+        prompt_id="onboarding_insight",
+    )
 
 
 def _merge_llm_result(
@@ -542,7 +557,10 @@ def _merge_llm_result(
         clause = str(opening_raw.get("insight") or "").strip()
         if clause:
             clause = clause[0].lower() + clause[1:] if len(clause) > 1 else clause.lower()
-            out["opening"] = {"bridge": bridge, "insight": clause[:120]}
+            out["opening"] = {
+                "bridge": bridge,
+                "insight": _fit_clause_to_bridge(bridge, clause)[:120],
+            }
     if not out.get("opening"):
         if require_llm_fields:
             missing.append("opening")

@@ -1,13 +1,16 @@
-from datetime import date, time
+import json
+from datetime import date, time, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 from urllib.parse import parse_qs, unquote_plus, urlencode, urlparse
 
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from core.models import (
+    AuthToken,
     NatalChart,
     OnboardingSession,
     OnboardingStep,
@@ -576,24 +579,36 @@ class PaidReportTests(TestCase):
         detail = self.client.get(f"/api/orders/{self.order.public_id}/", **self._auth())
         self.assertEqual(detail.status_code, 200)
         report = detail.json()["report"]
-        self.assertEqual(report["schema_version"], 3)
+        self.assertEqual(report["schema_version"], 4)
         self.assertIn("document", report)
-        self.assertNotIn("person", report)
+        person = report["person"]
+        self.assertEqual(person["birth_date"], "1993-08-21")
+        self.assertEqual(person["birth_time"], "09:45")
+        self.assertEqual(person["birth_place"], "Москва")
+        self.assertTrue(person["has_birth_time"])
+        self.assertNotIn("name", person)
         self.assertNotIn("customer_email", detail.json())
         self.assertNotIn("name", report["document"].get("quiz") or {})
         self.assertNotIn("payload", report["document"].get("generation") or {})
         section_ids = [section["id"] for section in report["sections"]]
         self.assertEqual(
             section_ids,
-            ["natal", "cycles", "request", "summary"],
+            ["natal", "aspects", "cycles", "request", "practice"],
         )
         natal_section = next(section for section in report["sections"] if section["id"] == "natal")
-        self.assertTrue(any("Солнце" in block["title"] for block in natal_section["blocks"]))
+        self.assertTrue(
+            any("Солнце" in (block.get("title") or "") or "Солнце" in (block.get("text") or "") for block in natal_section["blocks"])
+        )
         self.assertTrue(any(block["title"].startswith("1-й дом") for block in natal_section["blocks"]))
         self.assertFalse(any(block["title"] == "Исходные данные" for block in natal_section["blocks"]))
         self.assertTrue(report["document"]["factual"]["natal"].get("wheel", {}).get("planets"))
         self.assertEqual(report["document"]["generation"]["system_prompt_id"], "paid_report")
-        self.assertEqual(report["document"]["interpretive"]["status"], "pending_llm")
+        self.assertEqual(report["document"]["interpretive"]["status"], "fallback")
+        natal_layer = report["document"]["interpretive"]["natal"]
+        self.assertEqual(natal_layer["source"], "fallback")
+        self.assertIn("core_portrait", natal_layer["payload"])
+        self.assertIn("big_three", natal_layer["payload"])
+        self.assertGreater(len(natal_layer["payload"]["big_three"]["sun"]["body"]), 120)
 
         pdf = self.client.get(f"/api/orders/{self.order.public_id}/report.pdf/", **self._auth())
         self.assertEqual(pdf.status_code, 200)
@@ -621,6 +636,452 @@ class PaidReportTests(TestCase):
         self.assertNotIn(str(self.order.public_id), html)
         self.assertNotIn("Если это не та почта", html)
         self.assertNotIn("укажи другой адрес", html)
+
+    @patch("core.services.report_natal.llm_client.is_configured", return_value=True)
+    @patch("core.services.report_natal.llm_client.chat_json")
+    def test_natal_generate_returns_llm_layer(self, chat_json, _configured):
+        chat_json.return_value = {
+            "report_type": "natal",
+            "core_portrait": {
+                "headline": "Слой модели",
+                "summary": "Это текст, который вернул бы API скилла. Ещё одно предложение для плотности.",
+            },
+            "big_three": {
+                "sun": {
+                    "headline": "Солнце с API",
+                    "body": "Развёрнутое солнце от модели. Второй абзац механизма и цены, не два слова.",
+                    "why": "Солнце во Льве · дом 10",
+                    "question": "Где видимость уже работа на отклик?",
+                }
+            },
+            "sections": [
+                {
+                    "id": "mind",
+                    "title": "Как работает твой ум",
+                    "headline": "Ум",
+                    "summary": "Сумма.",
+                    "deep_read": ["Механизм."],
+                    "why": "Меркурий",
+                    "question": "Где мысль уже готова выйти?",
+                }
+            ],
+            "reflection_questions": ["Что проверяешь в опыте?"],
+        }
+        self.order.status = Order.Status.PAID
+        self.order.save(update_fields=["status"])
+        response = self.client.post(
+            "/api/me/report/natal/generate/",
+            {"force": True},
+            format="json",
+            **self._auth(),
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        data = response.json()
+        self.assertEqual(data["status"], "llm")
+        self.assertEqual(data["natal"]["payload"]["core_portrait"]["headline"], "Слой модели")
+        self.assertIn("Развёрнутое солнце", data["natal"]["payload"]["big_three"]["sun"]["body"])
+        self.assertEqual(chat_json.call_args.kwargs.get("prompt_id"), "paid_report_natal")
+        natal_user = json.loads(chat_json.call_args.kwargs["user"])
+        self.assertEqual(natal_user["reader"]["address"], "ты")
+        self.assertEqual(natal_user["reader"]["grammatical_gender"], "unspecified")
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.interpretive["natal"]["source"], "llm")
+
+    @patch("core.services.report_aspects.llm_client.is_configured", return_value=True)
+    @patch("core.services.report_aspects.llm_client.chat_json")
+    def test_aspects_generate_returns_llm_layer(self, chat_json, _configured):
+        def fake_chat_json(**kwargs):
+            user = json.loads(kwargs["user"])
+            return {
+                "report_type": "natal_aspects",
+                "intro": {
+                    "headline": "Связки модели",
+                    "summary": "Это слой аспектов с API, не транзит и не прогноз периода.",
+                },
+                "aspects": [
+                    {
+                        "aspect_id": row.get("id"),
+                        "category": row.get("category") or "mixed",
+                        "headline": "Когда две функции уже сцеплены внутри карты",
+                        "summary": (
+                            "Это слой аспектов с API, не транзит и не прогноз периода. "
+                            "Карточка собрана целиком, без склейки со словарём."
+                        ),
+                        "deep_read": [
+                            "Механизм связки двух функций внутри натальной карты.",
+                            "Цена появляется там, где реакция становится единственным способом.",
+                        ],
+                        "resource": "Можно опереться на уже существующий канал между темами.",
+                        "tension_or_blind_spot": "Привычная связка может начать звучать как единственный вариант.",
+                        "how_to_work": "Заметить, где реакция уже не про данные, а про защиту.",
+                        "reflection_questions": ["Где эта связка узнаётся в опыте, а где нет?"],
+                        "a": (row.get("planet_a") or {}).get("key"),
+                        "b": (row.get("planet_b") or {}).get("key"),
+                        "aspect": row.get("aspect_type"),
+                        "aspect_ru": row.get("aspect_type_ru"),
+                        "a_name": (row.get("planet_a") or {}).get("name_ru"),
+                        "b_name": (row.get("planet_b") or {}).get("name_ru"),
+                    }
+                    for row in (user.get("aspects") or [])
+                ],
+            }
+
+        chat_json.side_effect = fake_chat_json
+        self.order.status = Order.Status.PAID
+        self.order.save(update_fields=["status"])
+        response = self.client.post(
+            "/api/me/report/aspects/generate/",
+            {"force": True},
+            format="json",
+            **self._auth(),
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        data = response.json()
+        self.assertEqual(data["status"], "llm")
+        self.assertEqual(data["aspects"]["payload"]["intro"]["headline"], "Связки модели")
+        self.assertTrue(data["aspects"]["payload"]["aspects"])
+        self.assertEqual(chat_json.call_args.kwargs.get("prompt_id"), "paid_report_aspects")
+        aspects_user = json.loads(chat_json.call_args.kwargs["user"])
+        self.assertEqual(aspects_user["reader"]["grammatical_gender"], "unspecified")
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.interpretive["aspects"]["source"], "llm")
+
+    @patch("core.services.report_cycles.llm_client.is_configured", return_value=True)
+    @patch("core.services.report_cycles.llm_client.chat_json")
+    def test_cycles_generate_returns_llm_layer(self, chat_json, _configured):
+        def fake_chat_json(**kwargs):
+            user = json.loads(kwargs["user"])
+            cycles = [row for row in user.get("cycles") or [] if row.get("priority") == "primary"]
+            if not cycles:
+                cycles = list(user.get("cycles") or [])
+            return {
+                "report_type": "current_cycles",
+                "period_overview": {
+                    "headline": "Период модели",
+                    "summary": "Это слой циклов с API, не натальный аспект и не прогноз события.",
+                    "main_tension": "Где тесно",
+                    "main_support": "Где канал",
+                },
+                "primary_cycles": [
+                    {
+                        "cycle_id": row["cycle_id"],
+                        "category": row.get("category") or "mixed",
+                        "technical_title": row.get("technical_title") or "",
+                        "headline": "Когда прежняя роль становится тесной",
+                        "summary": (
+                            "Сгенерированный цикл от модели. Это не фолбэк и не натальный "
+                            "аспект, а текущий период для наблюдения."
+                        ),
+                        "deep_read": (
+                            "Narrative модели про активацию, реакцию и гибкость "
+                            "без шаблонной слепой зоны."
+                        ),
+                        "protective_function": "Сгенерированная защитная функция.",
+                        "tension_or_blind_spot": "Сгенерированная слепая зона этого цикла.",
+                        "resource": "Сгенерированный ресурс.",
+                        "how_to_work": "Сгенерированный способ работать с циклом.",
+                        "reflection_questions": ["Где это уже заметно в неделях?"],
+                    }
+                    for row in cycles
+                ],
+                "secondary_cycles": [],
+                "cross_cycle_synthesis": {
+                    "headline": "Как периоды встречаются",
+                    "narrative": "Несколько активаций могут усиливать одну реакцию.",
+                    "reflection_questions": ["Что уже повторяется в этих неделях?"],
+                },
+            }
+
+        chat_json.side_effect = fake_chat_json
+        self.order.status = Order.Status.PAID
+        self.order.save(update_fields=["status"])
+        response = self.client.post(
+            "/api/me/report/cycles/generate/",
+            {"force": True},
+            format="json",
+            **self._auth(),
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        data = response.json()
+        self.assertEqual(data["status"], "llm")
+        self.assertEqual(data["cycles"]["payload"]["period_overview"]["headline"], "Период модели")
+        self.assertEqual(data["cycles"]["payload"]["report_type"], "current_cycles")
+        self.assertEqual(data["cycles"]["generation_status"], "generated")
+        generated = data["cycles"]["payload"]["primary_cycles"]
+        self.assertTrue(generated)
+        self.assertEqual(generated[0]["source"], "llm")
+        blob = json.dumps(generated, ensure_ascii=False)
+        self.assertNotIn("Слепая зона периода", blob)
+        self.assertNotIn("ломает характер", blob)
+        self.assertEqual(chat_json.call_args.kwargs.get("prompt_id"), "paid_report_cycles")
+        cycles_user = json.loads(chat_json.call_args.kwargs["user"])
+        self.assertEqual(cycles_user["reader"]["grammatical_gender"], "unspecified")
+        self.assertIn("cycles", cycles_user)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.interpretive["cycles"]["source"], "llm")
+
+    @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
+    def test_should_start_generation_when_layers_missing(self, _configured):
+        from core.services.report_jobs import should_start_generation
+
+        self.order.status = Order.Status.PAID
+        self.order.save(update_fields=["status"])
+        self.assertTrue(should_start_generation(self.order, retry_failed=False))
+        self.order.interpretive = {"generation": {"status": "done"}}
+        self.assertFalse(should_start_generation(self.order, retry_failed=False))
+        self.assertTrue(should_start_generation(self.order, retry_failed=True))
+
+    def test_schedule_is_noop_during_django_tests(self):
+        from core.services.report_jobs import _inflight_orders, schedule_paid_report_generation
+
+        self.order.status = Order.Status.PAID
+        self.order.save(update_fields=["status"])
+        schedule_paid_report_generation(self.order.pk, retry_failed=True)
+        self.assertNotIn(self.order.pk, _inflight_orders)
+
+    @patch("core.services.llm_client.is_configured", return_value=True)
+    @patch("core.services.llm_client.chat_json")
+    def test_generate_missing_layers_runs_all_sections(self, chat_json, _configured):
+        from core.services import report_jobs
+        from core.services.report_jobs import generate_missing_interpretive_layers
+
+        report_jobs._section_inflight.clear()
+        report_jobs._inflight_orders.clear()
+
+        def fake_chat_json(*, prompt_id="", **kwargs):
+            if prompt_id == "paid_report_natal":
+                return {
+                    "report_type": "natal",
+                    "core_portrait": {
+                        "headline": "Слой модели",
+                        "summary": "Это текст, который вернул бы API скилла. Ещё одно предложение для плотности.",
+                    },
+                    "big_three": {
+                        "sun": {
+                            "headline": "Солнце с API",
+                            "body": "Развёрнутое солнце от модели. Второй абзац механизма и цены, не два слова.",
+                            "why": "Солнце во Льве · дом 10",
+                            "question": "Где видимость уже работа на отклик?",
+                        }
+                    },
+                    "sections": [],
+                    "reflection_questions": ["Что проверяешь в опыте?"],
+                }
+            if prompt_id == "paid_report_aspects":
+                user = json.loads(kwargs["user"])
+                return {
+                    "report_type": "natal_aspects",
+                    "intro": {
+                        "headline": "Связки модели",
+                        "summary": "Это слой аспектов с API, не транзит и не прогноз периода.",
+                    },
+                    "aspects": [
+                        {
+                            "aspect_id": row.get("id"),
+                            "category": row.get("category") or "mixed",
+                            "headline": "Когда стержень спорит с опорой",
+                            "summary": (
+                                "Это слой аспектов с API, не транзит и не прогноз периода. "
+                                "Карточка собрана целиком, без склейки со словарём."
+                            ),
+                            "deep_read": [
+                                "Механизм связки двух функций внутри натальной карты.",
+                                "Цена появляется там, где реакция становится единственным способом.",
+                            ],
+                            "a": (row.get("planet_a") or {}).get("key"),
+                            "b": (row.get("planet_b") or {}).get("key"),
+                            "aspect": row.get("aspect_type"),
+                        }
+                        for row in (user.get("aspects") or [])
+                    ],
+                }
+            if prompt_id == "paid_report_request":
+                return {
+                    "report_type": "request",
+                    "request": {
+                        "title": "Найти опору перед следующим выбором",
+                        "text": (
+                            "Сейчас важно понять, какой шаг ещё ощущается своим. "
+                            "Фокус держится на выборе, а не на прогнозе событий. "
+                            "К астрологии приходишь, чтобы яснее увидеть пересечение."
+                        ),
+                    },
+                    "connections": [
+                        {
+                            "source_id": "uranus_square_sun",
+                            "source_type": "cycle",
+                            "title": "Свобода от прежней роли",
+                            "text": (
+                                "Этот цикл уже разобран отдельно. Здесь важно другое: "
+                                "в запросе о выборе он усиливает вопрос, насколько прежнее "
+                                "направление ещё ощущается своим."
+                            ),
+                        },
+                        {
+                            "source_id": "saturn_square_mercury",
+                            "source_type": "aspect",
+                            "title": "Когда мысль должна быть слишком правильной",
+                            "text": (
+                                "Натальная связка помогает понять, почему перед шагом "
+                                "так легко включается дополнительная проверка. "
+                                "Для текущего запроса это может значить: решение откладывается "
+                                "не из пустоты, а из потребности в прочности."
+                            ),
+                        },
+                    ],
+                    "core_distinction": {
+                        "title": "Своё желание ↔ внешнее подтверждение",
+                        "text": (
+                            "Возможно, сейчас вопрос не только в том, какой вариант выбрать, "
+                            "но и в том, чьё одобрение всё ещё нужно, чтобы шаг стал возможным. "
+                            "Стоит проверить, где опора уже есть — а где остаётся привычка ждать сигнала."
+                        ),
+                        "provenance": ["uranus_square_sun", "saturn_square_mercury"],
+                    },
+                    "resource": {
+                        "source_id": "resource_contact",
+                        "source_type": "cycle",
+                        "title": "На что можно опереться",
+                        "text": (
+                            "В карте и текущем небе уже есть канал, которым можно пользоваться "
+                            "специально: не ждать идеальной ясности, а проверять маленьким шагом."
+                        ),
+                    },
+                    "takeaway": (
+                        "Возможно, сейчас важно точнее увидеть, что стоит различить перед следующим шагом. "
+                        "Карта не принимает решение за тебя, но помогает не перепутать своё желание с привычкой."
+                    ),
+                }
+            if prompt_id == "paid_report_practice":
+                return {
+                    "report_type": "practice",
+                    "start_here": {
+                        "headline": "Ясность и гарантия — не одно и то же",
+                        "text": (
+                            "Сейчас полезно исследовать, где желание быстрее закрыть неопределённость "
+                            "связано с реальным несоответствием, а где — с потребностью снизить напряжение. "
+                            "Вкладка поможет различить привычную проверку и то, что для тебя важно сохранить. "
+                            "Это не ещё один разбор карты, а способ проверить найденное различение на опыте."
+                        ),
+                        "provenance": ["request", "uranus_square_sun"],
+                    },
+                    "pattern": {
+                        "title": "Что может повторяться",
+                        "text": (
+                            "Когда исход становится менее предсказуемым, может хотеться быстрее "
+                            "решить вопрос, собрать больше подтверждений или отложить действие "
+                            "до полной ясности. Это наблюдаемый способ реагировать, а не ярлык."
+                        ),
+                        "source_ids": ["saturn_square_mercury"],
+                    },
+                    "protective_function": {
+                        "title": "Что эта реакция может защищать",
+                        "text": (
+                            "Одна из возможных функций этой реакции — быстро вернуть ощущение "
+                            "контроля там, где результат невозможно гарантировать. "
+                            "Стоит проверить, что именно она помогает сохранить."
+                        ),
+                    },
+                    "cost": {
+                        "title": "Где это перестаёт помогать",
+                        "text": (
+                            "Дополнительная проверка помогает снизить риск ошибки. "
+                            "Но если уверенность становится условием действия, анализ может "
+                            "начать заменять реальную обратную связь."
+                        ),
+                    },
+                    "key_distinctions": [
+                        {
+                            "left": "ясность",
+                            "right": "гарантия",
+                            "note": "Их легко смешать, когда напряжение высокое.",
+                        }
+                    ],
+                    "values": {
+                        "title": "Что здесь важно сохранить",
+                        "text": (
+                            "Если убрать необходимость сначала почувствовать полную уверенность, "
+                            "что для тебя здесь важно не потерять? Различай желаемый исход "
+                            "и способ, которым ты хочешь действовать."
+                        ),
+                    },
+                    "reflection_questions": [
+                        "Где эта реакция включается сильнее всего?",
+                        "Что она помогает не чувствовать, не рисковать или сохранять?",
+                        "В какой момент стратегия перестаёт помогать?",
+                        "Что важно сохранить, даже если напряжение не исчезнет сразу?",
+                        "Какой другой способ защитить ту же потребность возможен?",
+                        "Что можно проверить в реальности вместо ещё одного круга анализа?",
+                    ],
+                    "experiment": {
+                        "title": "Попробуй проверить",
+                        "text": (
+                            "Когда снова захочется решить всё сразу, отдельно запиши: "
+                            "«что я хочу изменить?» и «что я хочу перестать чувствовать?». "
+                            "Сравни ответы."
+                        ),
+                        "duration": "несколько дней",
+                    },
+                    "observe_over_time": [
+                        "когда желание принять решение резко усиливается",
+                        "какие ситуации запускают знакомую реакцию",
+                        "какие действия реально дают больше ясности",
+                    ],
+                    "user_takeaway_prompt": "Сейчас мне важно различать…",
+                }
+            user = json.loads(kwargs["user"])
+            cycles = [row for row in user.get("cycles") or [] if row.get("priority") == "primary"]
+            if not cycles:
+                cycles = list(user.get("cycles") or [])
+            return {
+                "report_type": "current_cycles",
+                "period_overview": {
+                    "headline": "Период модели",
+                    "summary": "Это слой циклов с API, не натальный аспект и не прогноз события.",
+                },
+                "primary_cycles": [
+                    {
+                        "cycle_id": row["cycle_id"],
+                        "category": row.get("category") or "mixed",
+                        "headline": "Когда прежняя роль становится тесной",
+                        "summary": (
+                            "Сгенерированный цикл от модели. Это не фолбэк и не натальный "
+                            "аспект, а текущий период для наблюдения."
+                        ),
+                        "deep_read": "Narrative модели про активацию без шаблонной слепой зоны.",
+                    }
+                    for row in cycles
+                ],
+                "secondary_cycles": [],
+                "cross_cycle_synthesis": {
+                    "headline": "Как периоды встречаются",
+                    "narrative": "Несколько активаций могут усиливать одну реакцию.",
+                },
+            }
+
+        chat_json.side_effect = fake_chat_json
+        self.order.status = Order.Status.PAID
+        self.order.save(update_fields=["status"])
+        generate_missing_interpretive_layers(self.order)
+        self.order.refresh_from_db()
+        store = self.order.interpretive
+        self.assertEqual(store["generation"]["status"], "done")
+        self.assertEqual(store["natal"]["source"], "llm")
+        self.assertEqual(store["aspects"]["source"], "llm")
+        self.assertEqual(store["cycles"]["source"], "llm")
+        self.assertEqual(store["request"]["source"], "llm")
+        self.assertEqual(store["practice"]["source"], "llm")
+        prompt_ids = [call.kwargs.get("prompt_id") for call in chat_json.call_args_list]
+        self.assertEqual(
+            prompt_ids,
+            [
+                "paid_report_natal",
+                "paid_report_aspects",
+                "paid_report_cycles",
+                "paid_report_request",
+                "paid_report_practice",
+            ],
+        )
 
     def test_pdf_forbidden_until_paid(self):
         response = self.client.get(
@@ -785,13 +1246,1006 @@ class InsightPersonalizeTests(TestCase):
         )
         edit.assert_not_called()
         chat_json.assert_called_once()
+        self.assertEqual(chat_json.call_args.kwargs.get("prompt_id"), "onboarding_insight")
         self.assertTrue(result.get("editorial_passed"))
         self.assertEqual(result.get("source"), "polza")
+
+
+class LlmProviderOffTests(TestCase):
+    @override_settings(LLM_PROVIDER="off", POLZA_API_KEY="test-key", GROQ_API_KEY="g")
+    def test_off_disables_llm_even_with_keys(self):
+        from core.services.llm_client import active_provider, is_configured
+
+        self.assertIsNone(active_provider())
+        self.assertFalse(is_configured())
+
+
+class PromptModelTests(TestCase):
+    def tearDown(self):
+        from core.services.llm_prompts import load_prompt_file
+
+        load_prompt_file.cache_clear()
+
+    @override_settings(
+        POLZA_MODEL="openai/gpt-5.6-luna-pro",
+        LLM_MODEL_ONBOARDING_INSIGHT="",
+        LLM_MODEL_EDITORIAL="",
+        LLM_MODEL_PAID_REPORT="",
+        LLM_MODEL_PAID_REPORT_NATAL="",
+        LLM_MODEL_PAID_REPORT_ASPECTS="",
+        LLM_MODEL_PAID_REPORT_CYCLES="",
+        LLM_MODEL_PAID_REPORT_REQUEST="",
+        LLM_MODEL_PAID_REPORT_PRACTICE="",
+    )
+    def test_paid_report_frontmatter_model_is_used(self):
+        from core.services.editorial import load_editorial_system
+        from core.services.llm_prompts import (
+            PROMPT_EDITORIAL,
+            PROMPT_ONBOARDING_INSIGHT,
+            PROMPT_PAID_REPORT,
+            PROMPT_PAID_REPORT_ASPECTS,
+            PROMPT_PAID_REPORT_CYCLES,
+            PROMPT_PAID_REPORT_NATAL,
+            PROMPT_PAID_REPORT_PRACTICE,
+            PROMPT_PAID_REPORT_REQUEST,
+            UnknownPromptError,
+            resolve_model,
+        )
+
+        load_editorial_system.cache_clear()
+        self.assertEqual(resolve_model(PROMPT_PAID_REPORT), "openai/gpt-5.6-terra-pro")
+        self.assertEqual(resolve_model(PROMPT_PAID_REPORT_NATAL), "openai/gpt-5.6-luna-pro")
+        self.assertEqual(resolve_model(PROMPT_PAID_REPORT_ASPECTS), "openai/gpt-5.6-luna-pro")
+        self.assertEqual(resolve_model(PROMPT_PAID_REPORT_CYCLES), "openai/gpt-5.6-luna-pro")
+        self.assertEqual(resolve_model(PROMPT_PAID_REPORT_REQUEST), "openai/gpt-5.6-luna-pro")
+        self.assertEqual(resolve_model(PROMPT_PAID_REPORT_PRACTICE), "openai/gpt-5.6-luna-pro")
+        self.assertEqual(resolve_model(PROMPT_EDITORIAL), "openai/gpt-5.6-terra-pro")
+        self.assertEqual(resolve_model(PROMPT_ONBOARDING_INSIGHT), "openai/gpt-5.6-luna-pro")
+        with self.assertRaises(UnknownPromptError):
+            resolve_model("not_a_prompt")
+
+    @override_settings(LLM_MODEL_PAID_REPORT="anthropic/claude-sonnet-4-5")
+    def test_env_override_beats_frontmatter(self):
+        from core.services.llm_prompts import PROMPT_PAID_REPORT, resolve_model
+
+        self.assertEqual(resolve_model(PROMPT_PAID_REPORT), "anthropic/claude-sonnet-4-5")
+
+    @override_settings(POLZA_MODEL="openai/gpt-4o")
+    def test_explicit_model_argument_wins(self):
+        from core.services.llm_prompts import PROMPT_PAID_REPORT, resolve_model
+
+        self.assertEqual(
+            resolve_model(PROMPT_PAID_REPORT, model="anthropic/claude-opus-4-6"),
+            "anthropic/claude-opus-4-6",
+        )
+
+    def test_editorial_body_strips_frontmatter(self):
+        from core.services.editorial import load_editorial_system
+        from core.services.llm_prompts import PROMPT_PAID_REPORT_NATAL, load_prompt
+
+        load_editorial_system.cache_clear()
+        body = load_editorial_system()
+        self.assertFalse(body.startswith("---"))
+        self.assertNotIn("id: editorial", body.split("# 1.", 1)[0])
+        self.assertIn("COSMIRROR", body)
+        natal = load_prompt(PROMPT_PAID_REPORT_NATAL).body
+        self.assertIn("вкладка платного отчёта", natal.lower())
+        self.assertNotIn("cosmirror-natal-interpreter", natal)
+
+
+class NatalFallbackCopyTests(TestCase):
+    def test_mercury_in_leo_is_lived_hypothesis_not_glossary(self):
+        from core.services.report_lexicon import placement_sentence
+
+        text = placement_sentence("mercury", "Лев", 11, sign="leo")
+        self.assertNotIn("связано с темой", text)
+        self.assertNotIn("в Лев", text)
+        self.assertNotIn("Дом 11:", text)
+        self.assertIn("может", text)
+        self.assertIn("своих людей", text)
+        self.assertTrue(text.startswith("Тебе может быть важно"))
+
+    def test_natal_aspect_is_inner_link_not_transit(self):
+        from core.services.report_lexicon import natal_aspect_sentence
+
+        text = natal_aspect_sentence("sun", "square", "квадрат", "moon")
+        self.assertIn("Солнце", text)
+        self.assertIn("Луна", text)
+        self.assertIn("внутренн", text)
+        self.assertNotIn("Транзитный", text)
+
+    def test_natal_fallback_is_skill_shaped_and_native(self):
+        from core.services.report_blueprint import build_report_document
+
+        document = build_report_document(
+            natal={
+                "has_birth_time": True,
+                "planets": {
+                    "sun": {"sign": "gemini", "sign_ru": "Близнецы", "sign_index": 2, "degree": 5.0, "house": 7},
+                    "moon": {"sign": "taurus", "sign_ru": "Телец", "sign_index": 1, "degree": 12.0, "house": 6},
+                    "mercury": {"sign": "leo", "sign_ru": "Лев", "sign_index": 4, "degree": 2.0, "house": 9},
+                    "saturn": {"sign": "taurus", "sign_ru": "Телец", "sign_index": 1, "degree": 8.0, "house": 6},
+                },
+                "ascendant": {"sign": "scorpio", "sign_ru": "Скорпион", "sign_index": 7, "degree": 5.0},
+                "houses": [{"house": i + 1, "sign": "scorpio", "sign_ru": "Скорпион"} for i in range(12)],
+            },
+            sky_now={"datetime_utc": "2026-08-17T12:00:00Z", "planets": {}},
+        )
+        natal = document["interpretive"]["natal"]["payload"]
+        self.assertEqual(natal["source"], "fallback")
+        keys = [row["key"] for row in natal["placements"]]
+        self.assertEqual(keys[0], "sun_gemini")
+        self.assertIn("moon_taurus", keys)
+        self.assertIn("asc_scorpio", keys)
+        self.assertIn("saturn_taurus", keys)
+        sun = next(row for row in natal["placements"] if row["key"] == "sun_gemini")
+        self.assertIn("движен", sun["summary"].lower() + sun["headline"].lower())
+        self.assertTrue(sun["house_modifier"])
+        self.assertIn("заметн", sun["house_modifier"].lower())
+        moon = natal["big_three"]["moon"]["body"]
+        self.assertIn("опора", moon.lower())
+        self.assertGreater(len(natal["core_portrait"]["summary"]), 80)
+        self.assertTrue(natal["core_portrait"]["themes"])
+        theme_ids = [row["theme_id"] for row in natal["core_portrait"]["themes"]]
+        self.assertTrue(set(theme_ids) & {"safety_vs_change", "pace_and_stability"})
+        self.assertFalse(any(row["point_key"] == "uranus" for row in natal["placements"]))
+
+    def test_natal_fallback_hides_ascendant_without_birth_time(self):
+        from core.services.report_natal_fallback import fallback_natal_interpretation
+
+        payload = fallback_natal_interpretation(
+            {
+                "factual": {
+                    "natal": {
+                        "has_birth_time": False,
+                        "points": [
+                            {"key": "sun", "name": "Солнце", "sign": "gemini", "sign_ru": "Близнецы", "house": 7},
+                            {"key": "moon", "name": "Луна", "sign": "taurus", "sign_ru": "Телец", "house": 6},
+                            {"key": "ascendant", "name": "Асцендент", "sign": "scorpio", "sign_ru": "Скорпион"},
+                        ],
+                    }
+                }
+            }
+        )
+        self.assertFalse(any(row["point_key"] == "ascendant" for row in payload["placements"]))
+        self.assertTrue(payload["limitations"])
+        self.assertIn("не читаем", payload["big_three"]["ascendant"]["headline"].lower())
+
+    def test_natal_library_covers_semantic_units(self):
+        from core.services.report_natal_fallback import load_natal_fallback_library
+
+        library = load_natal_fallback_library()
+        self.assertEqual(len(library["placements"]), 84)
+        self.assertEqual(len(library["ascendants"]), 12)
+        self.assertEqual(len(library["house_modifiers"]), 12)
+        self.assertEqual(len(library["theme_synthesis"]), 16)
+
+    def test_natal_normalize_does_not_field_merge(self):
+        from core.services.report_natal import normalize_natal_payload
+        from core.services.report_natal_fallback import fallback_natal_interpretation
+
+        document = {
+            "factual": {
+                "natal": {
+                    "has_birth_time": True,
+                    "points": [
+                        {"key": "sun", "name": "Солнце", "sign": "gemini", "sign_ru": "Близнецы", "house": 7},
+                        {"key": "moon", "name": "Луна", "sign": "taurus", "sign_ru": "Телец", "house": 6},
+                    ],
+                }
+            }
+        }
+        fallback = fallback_natal_interpretation(document)
+        mixed = normalize_natal_payload(
+            {
+                "core_portrait": {"headline": "Только заголовок"},
+                "big_three": {
+                    "sun": {"headline": "Солнце модели", "body": ""},
+                },
+            },
+            fallback,
+        )
+        self.assertEqual(mixed["source"], "fallback")
+        self.assertEqual(mixed["placements"][0]["key"], "sun_gemini")
+        self.assertNotEqual(mixed["core_portrait"]["headline"], "Только заголовок")
+
+    def test_sealed_llm_layer_survives_cache_key_change(self):
+        from types import SimpleNamespace
+
+        from core.services.report_aspects import cached_aspects_layer
+        from core.services.report_cycles import cached_cycles_layer
+        from core.services.report_natal import cached_natal_layer
+        from core.services.report_practice import cached_practice_layer
+        from core.services.report_request import cached_request_layer
+
+        document = {"factual": {"natal": {"points": [], "aspects": []}, "sky": {"datetime_utc": "2099-01-01T00:00:00Z"}}}
+        order = SimpleNamespace(
+            interpretive={
+                "natal": {
+                    "status": "ready",
+                    "source": "llm",
+                    "cache_key": "stale-key",
+                    "payload": {"core_portrait": {"headline": "Sealed", "summary": "x" * 50}},
+                },
+                "aspects": {
+                    "status": "ready",
+                    "source": "llm",
+                    "cache_key": "stale-key",
+                    "payload": {"aspects": [{"aspect_id": "a1", "summary": "x" * 50}]},
+                },
+                "cycles": {
+                    "status": "ready",
+                    "source": "llm",
+                    "cache_key": "stale-key",
+                    "payload": {"report_type": "current_cycles", "primary_cycles": []},
+                },
+                "request": {
+                    "status": "ready",
+                    "source": "llm",
+                    "cache_key": "stale-key",
+                    "payload": {
+                        "report_type": "request",
+                        "request": {"title": "Sealed request", "text": "x" * 50},
+                    },
+                },
+                "practice": {
+                    "status": "ready",
+                    "source": "llm",
+                    "cache_key": "stale-key",
+                    "payload": {
+                        "report_type": "practice",
+                        "start_here": {"headline": "Sealed practice", "text": "x" * 50},
+                    },
+                },
+            }
+        )
+        self.assertEqual(cached_natal_layer(order, document)["payload"]["core_portrait"]["headline"], "Sealed")
+        self.assertEqual(cached_aspects_layer(order, document)["payload"]["aspects"][0]["aspect_id"], "a1")
+        self.assertEqual(cached_cycles_layer(order, document)["payload"]["report_type"], "current_cycles")
+        self.assertEqual(
+            cached_request_layer(order, document)["payload"]["request"]["title"],
+            "Sealed request",
+        )
+        self.assertEqual(
+            cached_practice_layer(order, document)["payload"]["start_here"]["headline"],
+            "Sealed practice",
+        )
+
+        order.interpretive["natal"]["source"] = "fallback"
+        self.assertIsNone(cached_natal_layer(order, document))
+        order.interpretive["request"]["source"] = "fallback"
+        self.assertIsNone(cached_request_layer(order, document))
+        order.interpretive["practice"]["source"] = "fallback"
+        self.assertIsNone(cached_practice_layer(order, document))
+
+
+class AspectsFallbackCopyTests(TestCase):
+    def test_aspects_fallback_is_skill_shaped_and_natal_not_transit(self):
+        from core.services.report_aspects import fallback_aspects_interpretation
+        from core.services.report_aspects_fallback import category_for
+
+        document = {
+            "factual": {
+                "natal": {
+                    "has_birth_time": True,
+                    "points": [
+                        {"key": "sun", "name": "Солнце", "sign": "gemini", "house": 7},
+                        {"key": "moon", "name": "Луна", "sign": "taurus", "house": 6},
+                        {"key": "mercury", "name": "Меркурий", "sign": "leo", "house": 9},
+                        {"key": "saturn", "name": "Сатурн", "sign": "pisces", "house": 4},
+                        {"key": "uranus", "name": "Уран", "sign": "gemini", "house": 7},
+                    ],
+                    "aspects": [
+                        {
+                            "id": "natal_mercury_square_saturn",
+                            "a": "mercury",
+                            "b": "saturn",
+                            "a_name": "Меркурий",
+                            "b_name": "Сатурн",
+                            "aspect": "square",
+                            "aspect_ru": "квадрат",
+                            "kind": "hard",
+                            "orb": 1.2,
+                        },
+                        {
+                            "id": "natal_moon_trine_venus",
+                            "a": "moon",
+                            "b": "sun",
+                            "a_name": "Луна",
+                            "b_name": "Солнце",
+                            "aspect": "trine",
+                            "aspect_ru": "тригон",
+                            "kind": "soft",
+                            "orb": 2.4,
+                        },
+                        {
+                            "id": "natal_sun_conjunction_uranus",
+                            "a": "sun",
+                            "b": "uranus",
+                            "a_name": "Солнце",
+                            "b_name": "Уран",
+                            "aspect": "conjunction",
+                            "aspect_ru": "соединение",
+                            "kind": "hard",
+                            "orb": 0.6,
+                        },
+                    ],
+                }
+            }
+        }
+        payload = fallback_aspects_interpretation(document)
+        self.assertEqual(payload["report_type"], "natal_aspects")
+        self.assertEqual(payload["source"], "fallback")
+        by_id = {row["aspect_id"]: row for row in payload["aspects"]}
+        square = by_id["natal_mercury_square_saturn"]
+        self.assertEqual(square["category"], "tension")
+        self.assertEqual(square["unit_key"], "mercury_square_saturn")
+        self.assertEqual(square["source"], "semantic_fallback")
+        self.assertIn("мысль", square["headline"].lower())
+        self.assertGreater(len(square["summary"]), 80)
+        self.assertGreaterEqual(len(square["deep_read"]), 2)
+        self.assertGreaterEqual(len(square["reflection_questions"]), 1)
+        self.assertTrue(square["resource"])
+        self.assertTrue(square["blind_spot"])
+        self.assertNotIn("Транзит", square["summary"])
+        self.assertNotIn("сейчас этот аспект активирован", square["summary"].lower())
+        self.assertEqual(by_id["natal_moon_trine_venus"]["category"], "resource")
+        self.assertEqual(by_id["natal_sun_conjunction_uranus"]["unit_key"], "sun_conjunction_uranus")
+        self.assertEqual(by_id["natal_sun_conjunction_uranus"]["category"], "mixed")
+        self.assertEqual(category_for("square"), "tension")
+        self.assertEqual(category_for("trine"), "resource")
+        self.assertEqual(category_for("conjunction"), "mixed")
+
+    def test_aspects_canonical_pair_and_no_field_merge(self):
+        from core.services.report_aspects import normalize_aspects_payload
+        from core.services.report_aspects_fallback import (
+            canonical_unit_key,
+            fallback_aspects_interpretation,
+            load_aspects_fallback_library,
+        )
+
+        self.assertEqual(canonical_unit_key("mars", "sun", "square"), "sun_square_mars")
+        self.assertEqual(canonical_unit_key("ascendant", "sun", "square"), "sun_square_asc")
+        library = load_aspects_fallback_library()
+        self.assertEqual(len(library["aspects"]), 325)
+        self.assertEqual(len(library["theme_syntheses"]), 12)
+
+        document = {
+            "factual": {
+                "natal": {
+                    "has_birth_time": False,
+                    "points": [
+                        {"key": "sun", "name": "Солнце", "sign": "leo"},
+                        {"key": "mars", "name": "Марс", "sign": "aries"},
+                        {"key": "ascendant", "name": "Асцендент", "sign": "scorpio"},
+                    ],
+                    "aspects": [
+                        {
+                            "id": "natal_mars_square_sun",
+                            "a": "mars",
+                            "b": "sun",
+                            "a_name": "Марс",
+                            "b_name": "Солнце",
+                            "aspect": "square",
+                            "aspect_ru": "квадрат",
+                            "orb": 1.1,
+                        },
+                        {
+                            "id": "natal_sun_square_asc",
+                            "a": "sun",
+                            "b": "ascendant",
+                            "a_name": "Солнце",
+                            "b_name": "Асцендент",
+                            "aspect": "square",
+                            "aspect_ru": "квадрат",
+                            "orb": 0.8,
+                        },
+                    ],
+                }
+            }
+        }
+        payload = fallback_aspects_interpretation(document)
+        keys = [row["unit_key"] for row in payload["aspects"]]
+        self.assertEqual(keys, ["sun_square_mars"])
+        mixed = normalize_aspects_payload(
+            {
+                "intro": {"headline": "Только заголовок"},
+                "aspects": [
+                    {
+                        "aspect_id": "natal_mars_square_sun",
+                        "headline": "Заголовок модели",
+                        "summary": "",
+                    }
+                ],
+            },
+            payload,
+        )
+        self.assertEqual(mixed["source"], "fallback")
+        self.assertEqual(mixed["aspects"][0]["unit_key"], "sun_square_mars")
+        self.assertNotEqual(mixed["intro"]["headline"], "Только заголовок")
+
+    def test_blueprint_exposes_aspects_layer(self):
+        from core.services.report_blueprint import build_report_document
+
+        document = build_report_document(
+            natal={
+                "has_birth_time": True,
+                "planets": {
+                    "sun": {"sign": "gemini", "sign_ru": "Близнецы", "sign_index": 2, "degree": 5.0, "house": 7},
+                    "moon": {"sign": "taurus", "sign_ru": "Телец", "sign_index": 1, "degree": 12.0, "house": 6},
+                },
+                "ascendant": {"sign": "scorpio", "sign_ru": "Скорпион", "sign_index": 7, "degree": 5.0},
+                "houses": [{"house": i + 1, "sign": "scorpio", "sign_ru": "Скорпион"} for i in range(12)],
+            },
+            sky_now={"datetime_utc": "2026-08-17T12:00:00Z", "planets": {}},
+        )
+        layer = document["interpretive"]["aspects"]
+        self.assertEqual(layer["source"], "fallback")
+        self.assertEqual(layer["payload"]["report_type"], "natal_aspects")
+        self.assertTrue(layer["payload"]["intro"]["summary"])
+
+
+class ReaderVoiceTests(TestCase):
+    def test_quiz_gender_becomes_grammatical_gender(self):
+        from core.services.report_accents import grammatical_gender, reader_voice
+
+        self.assertEqual(grammatical_gender({"gender": "female"}), "feminine")
+        self.assertEqual(grammatical_gender({"gender": "male"}), "masculine")
+        self.assertEqual(grammatical_gender({}), "unspecified")
+        self.assertEqual(
+            reader_voice({"gender": "female"}),
+            {"address": "ты", "grammatical_gender": "feminine"},
+        )
+
+    def test_natal_and_aspects_llm_user_pass_reader_gender(self):
+        from core.services.report_aspects import _aspects_llm_user
+        from core.services.report_natal import _natal_llm_user
+
+        document = {
+            "quiz": {"gender": "female", "focus_labels": ["любовь"], "intent_label": ""},
+            "factual": {
+                "natal": {
+                    "has_birth_time": True,
+                    "house_system": "placidus",
+                    "points": [
+                        {
+                            "key": "sun",
+                            "name": "Солнце",
+                            "sign": "gemini",
+                            "sign_ru": "Близнецы",
+                            "house": 7,
+                            "degree": 5.0,
+                        }
+                    ],
+                    "aspects": [
+                        {
+                            "id": "natal_mercury_square_saturn",
+                            "a": "mercury",
+                            "b": "saturn",
+                            "a_name": "Меркурий",
+                            "b_name": "Сатурн",
+                            "aspect": "square",
+                            "aspect_ru": "квадрат",
+                            "kind": "hard",
+                            "orb": 1.2,
+                        }
+                    ],
+                    "houses": [],
+                }
+            },
+        }
+        natal_user = _natal_llm_user(document)
+        self.assertEqual(natal_user["reader"]["address"], "ты")
+        self.assertEqual(natal_user["reader"]["grammatical_gender"], "feminine")
+        aspects_user = _aspects_llm_user(document)
+        self.assertEqual(aspects_user["reader"]["grammatical_gender"], "feminine")
+        from core.services.report_cycles import _cycles_llm_user
+
+        cycles_user = _cycles_llm_user(document)
+        self.assertEqual(cycles_user["reader"]["grammatical_gender"], "feminine")
+
+
+class CyclesFallbackCopyTests(TestCase):
+    def _cycle_document(self, *hits, has_birth_time=True):
+        primary = list(hits)
+        return {
+            "accents": {
+                "primary": primary,
+                "pressure": [],
+                "resource": [],
+                "supporting": [],
+                "upcoming": [],
+            },
+            "factual": {"natal": {"has_birth_time": has_birth_time}},
+        }
+
+    def _uranus_sun(self, **overrides):
+        row = {
+            "id": "t_uranus_conjunction_sun",
+            "transit": "uranus",
+            "transit_name": "Уран",
+            "natal": "sun",
+            "natal_name": "Солнце",
+            "aspect": "conjunction",
+            "aspect_ru": "соединение",
+            "polarity": "mixed",
+            "orb": 0.56,
+            "motion": "separating",
+            "weight_hint": 0.94,
+            "fact": "Уран в соединении с Солнцем.",
+            "window": {"span_note": "волнами 12–18 месяцев", "peak_estimate": None},
+        }
+        row.update(overrides)
+        return row
+
+    def test_cycles_fallback_is_skill_shaped_and_natal_not_transit_mix(self):
+        from core.services.report_cycles import fallback_cycles_interpretation
+        from core.services.report_cycles_fallback import category_for_polarity
+
+        payload = fallback_cycles_interpretation(self._cycle_document(self._uranus_sun()))
+        self.assertEqual(payload["report_type"], "current_cycles")
+        self.assertEqual(payload["source"], "fallback")
+        self.assertTrue(payload["period_overview"]["headline"])
+        card = payload["primary_cycles"][0]
+        self.assertEqual(card["cycle_id"], "t_uranus_conjunction_sun")
+        self.assertEqual(card["unit_key"], "uranus_conjunction_sun")
+        self.assertEqual(card["source"], "semantic_fallback")
+        self.assertEqual(card["category"], "mixed")
+        self.assertGreater(len(card["summary"]), 80)
+        self.assertGreaterEqual(len(card["deep_read"]), 2)
+        self.assertTrue(card["protective_hypothesis"])
+        self.assertTrue(card["resource"])
+        self.assertTrue(card["tension_or_blind_spot"])
+        self.assertGreaterEqual(len(card["reflection_questions"]), 1)
+        self.assertNotIn("натальный квадрат", card["summary"].lower())
+        self.assertNotIn("Слепая зона периода", card["summary"])
+        self.assertNotIn("ломает характер", json.dumps(card, ensure_ascii=False))
+        self.assertEqual(category_for_polarity("pressure"), "tension")
+        self.assertEqual(category_for_polarity("resource"), "support")
+
+    def test_cycles_canonical_and_fast_transit_factual(self):
+        from core.services.report_cycles_fallback import (
+            canonical_unit_key,
+            fallback_cycles_interpretation,
+            load_cycles_fallback_library,
+        )
+
+        self.assertEqual(canonical_unit_key("uranus", "conjunction", "sun"), "uranus_conjunction_sun")
+        self.assertEqual(canonical_unit_key("saturn", "square", "ascendant"), "saturn_square_asc")
+        library = load_cycles_fallback_library()
+        self.assertEqual(len(library["units_by_id"]), 300)
+        self.assertEqual(len(library["theme_synthesis"]), 8)
+
+        payload = fallback_cycles_interpretation(
+            self._cycle_document(
+                {
+                    "id": "t_sun_square_mars",
+                    "transit": "sun",
+                    "transit_name": "Солнце",
+                    "natal": "mars",
+                    "natal_name": "Марс",
+                    "aspect": "square",
+                    "aspect_ru": "квадрат",
+                    "polarity": "pressure",
+                    "orb": 1.2,
+                    "motion": "applying",
+                    "weight_hint": 0.4,
+                    "fact": "Солнце в квадрате к Марсу.",
+                    "window": {},
+                }
+            )
+        )
+        blob = json.dumps(payload, ensure_ascii=False)
+        self.assertNotIn("Чтобы наблюдать тему, а не ждать события", blob)
+        self.assertNotIn("ломает характер", blob)
+        card = payload["primary_cycles"][0]
+        self.assertEqual(card["source"], "factual_fallback")
+        self.assertEqual(card["unit_key"], "sun_square_mars")
+        self.assertTrue(card["short_explanation"])
+        self.assertEqual(card["protective_function"], "")
+        self.assertEqual(len(card["reflection_questions"]), 1)
+
+    def test_accept_llm_does_not_fill_empty_skill_fields(self):
+        from core.services.report_cycles import (
+            accept_generated_cycles,
+            fallback_cycles_interpretation,
+        )
+
+        fallback = fallback_cycles_interpretation(self._cycle_document(self._uranus_sun()))
+        cid = fallback["primary_cycles"][0]["cycle_id"]
+        accepted = accept_generated_cycles(
+            {
+                "period_overview": {
+                    "headline": "Период модели",
+                    "summary": "Сгенерированный обзор текущего неба без фолбэка.",
+                },
+                "primary_cycles": [
+                    {
+                        "cycle_id": cid,
+                        "summary": (
+                            "Сгенерированный текст цикла достаточно длинный, "
+                            "чтобы пройти валидацию слоя интерпретации."
+                        ),
+                        "protective_function": "",
+                        "tension_or_blind_spot": "",
+                        "resource": "",
+                        "how_to_work": "",
+                    }
+                ],
+            },
+            fallback,
+        )
+        self.assertIsNotNone(accepted)
+        card = accepted["primary_cycles"][0]
+        self.assertEqual(card["source"], "llm")
+        self.assertEqual(card["protective_function"], "")
+        self.assertEqual(card["tension_or_blind_spot"], "")
+        self.assertEqual(card["how_to_work"], "")
+        self.assertNotIn("Слепая зона периода", card["tension_or_blind_spot"])
+        self.assertNotEqual(card["summary"], fallback["primary_cycles"][0]["summary"])
+
+    def test_invalid_llm_payload_is_rejected(self):
+        from core.services.report_cycles import (
+            accept_generated_cycles,
+            fallback_cycles_interpretation,
+        )
+
+        fallback = fallback_cycles_interpretation(self._cycle_document(self._uranus_sun()))
+        self.assertIsNone(
+            accept_generated_cycles(
+                {
+                    "period_overview": {"headline": "Период модели", "summary": "Есть обзор."},
+                    "primary_cycles": [],
+                },
+                fallback,
+            )
+        )
+        self.assertIsNone(
+            accept_generated_cycles(
+                {
+                    "period_overview": {
+                        "headline": "Период модели",
+                        "summary": "Сгенерированный обзор текущего неба без фолбэка.",
+                    },
+                    "primary_cycles": [
+                        {
+                            "cycle_id": fallback["primary_cycles"][0]["cycle_id"],
+                            "summary": "коротко",
+                        }
+                    ],
+                },
+                fallback,
+            )
+        )
+
+    @patch("core.services.report_cycles.llm_client.is_configured", return_value=True)
+    @patch("core.services.report_cycles.llm_client.chat_json")
+    def test_generate_failure_keeps_whole_fallback(self, chat_json, _configured):
+        from core.services import llm_client
+        from core.services.report_cycles import generate_cycles_interpretation
+
+        chat_json.side_effect = llm_client.LLMError("upstream")
+        result = generate_cycles_interpretation(self._cycle_document(self._uranus_sun()))
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["source"], "fallback")
+        self.assertEqual(result["generation_status"], "generation_failed")
+        card = result["payload"]["primary_cycles"][0]
+        self.assertEqual(card["source"], "semantic_fallback")
+        self.assertTrue(card["protective_hypothesis"])
+
+    @patch("core.services.report_cycles.llm_client.is_configured", return_value=True)
+    @patch("core.services.report_cycles.llm_client.chat_json")
+    def test_invalid_llm_generate_does_not_frankenstein(self, chat_json, _configured):
+        from core.services.report_cycles import generate_cycles_interpretation
+
+        chat_json.return_value = {
+            "period_overview": {"headline": "Период модели", "summary": "Обзор модели есть."},
+            "primary_cycles": [
+                {
+                    "cycle_id": "t_uranus_conjunction_sun",
+                    "summary": "коротко",
+                    "protective_function": "",
+                }
+            ],
+        }
+        result = generate_cycles_interpretation(self._cycle_document(self._uranus_sun()))
+        self.assertEqual(result["source"], "fallback")
+        self.assertEqual(result["generation_status"], "generation_failed")
+        blob = json.dumps(result["payload"], ensure_ascii=False)
+        self.assertNotIn("Слепая зона периода", blob)
+        self.assertEqual(result["payload"]["primary_cycles"][0]["source"], "semantic_fallback")
+
+    def test_blueprint_exposes_cycles_layer(self):
+        from core.services.report_blueprint import build_report_document
+
+        document = build_report_document(
+            natal={
+                "has_birth_time": True,
+                "planets": {
+                    "sun": {"sign": "gemini", "sign_ru": "Близнецы", "sign_index": 2, "degree": 5.0, "house": 7},
+                    "moon": {"sign": "taurus", "sign_ru": "Телец", "sign_index": 1, "degree": 12.0, "house": 6},
+                },
+                "ascendant": {"sign": "scorpio", "sign_ru": "Скорпион", "sign_index": 7, "degree": 5.0},
+                "houses": [{"house": i + 1, "sign": "scorpio", "sign_ru": "Скорпион"} for i in range(12)],
+            },
+            sky_now={"datetime_utc": "2026-08-17T12:00:00Z", "planets": {}},
+        )
+        layer = document["interpretive"]["cycles"]
+        self.assertEqual(layer["source"], "fallback")
+        self.assertEqual(layer["generation_status"], "fallback")
+        self.assertEqual(layer["payload"]["report_type"], "current_cycles")
+        self.assertEqual(layer["payload"]["source"], "fallback")
+        self.assertTrue(layer["payload"]["period_overview"]["summary"])
+        for card in layer["payload"]["primary_cycles"]:
+            self.assertIn(card["source"], {"semantic_fallback", "factual_fallback"})
+
+
+class RequestFallbackCopyTests(TestCase):
+    def _request_document(self) -> dict:
+        return {
+            "quiz": {
+                "focus": ["love", "path"],
+                "focus_labels": ["отношения", "путь"],
+                "life_stage": "many-spheres",
+                "life_stage_label": "многое меняется сразу",
+                "intent": "potential",
+                "intent_label": "понять свой потенциал",
+                "astrology_trigger": "understand-self",
+                "astrology_trigger_label": "хочу лучше понять себя",
+            },
+            "accents": {
+                "primary": [
+                    {
+                        "id": "t_uranus_square_sun",
+                        "transit_name": "Уран",
+                        "aspect_ru": "квадрат",
+                        "natal_name": "Солнце",
+                        "natal_house": 7,
+                        "fact": "Транзитный Уран в квадрате к натальному Солнцу.",
+                        "theme_tags": ["freedom_and_commitment"],
+                    }
+                ],
+                "resource": [
+                    {
+                        "id": "t_jupiter_trine_venus",
+                        "transit_name": "Юпитер",
+                        "aspect_ru": "тригон",
+                        "natal_name": "Венера",
+                        "fact": "Транзитный Юпитер в тригоне к Венере.",
+                        "theme_tags": ["growth_and_limits"],
+                    }
+                ],
+                "pressure": [],
+            },
+            "interpretive": {
+                "aspects": {
+                    "payload": {
+                        "aspects": [
+                            {
+                                "aspect_id": "natal_mercury_square_saturn",
+                                "category": "tension",
+                                "priority": 9,
+                                "theme_tags": ["mind_and_structure", "self_doubt_and_action"],
+                                "headline": "Мысль против структуры",
+                                "summary": "Натальный Меркурий в квадрате к Сатурну.",
+                            }
+                        ]
+                    }
+                },
+                "cycles": {
+                    "payload": {
+                        "primary_cycles": [
+                            {
+                                "cycle_id": "t_uranus_square_sun",
+                                "category": "pressure",
+                                "priority": 10,
+                                "theme_tags": ["freedom_and_commitment", "change"],
+                                "technical_title": "Уран □ Солнце",
+                                "headline": "Свобода и форма",
+                            }
+                        ],
+                        "secondary_cycles": [],
+                    }
+                },
+                "natal": {
+                    "payload": {
+                        "core_portrait": {
+                            "headline": "Портрет",
+                            "summary": "Краткий портрет.",
+                            "theme_tags": ["self_understanding"],
+                        }
+                    }
+                },
+            },
+            "factual": {
+                "natal": {
+                    "aspects": [
+                        {
+                            "id": "natal_mercury_square_saturn",
+                            "a": "mercury",
+                            "b": "saturn",
+                            "a_name": "Меркурий",
+                            "b_name": "Сатурн",
+                            "aspect": "square",
+                            "aspect_ru": "квадрат",
+                            "kind": "hard",
+                        }
+                    ]
+                }
+            },
+        }
+
+    def test_request_fallback_uses_preauthored_blocks(self):
+        from core.services.report_request_fallback import (
+            fallback_request_interpretation,
+            load_request_fallback_library,
+        )
+
+        library = load_request_fallback_library()
+        self.assertEqual(len(library["canonical_themes"]), 16)
+        self.assertIn("relationships", library["focus_sentences"])
+
+        payload = fallback_request_interpretation(self._request_document())
+        self.assertEqual(payload["report_type"], "request")
+        self.assertEqual(payload["source"], "semantic_fallback")
+        self.assertGreaterEqual(len(payload["request"]["title"]), 4)
+        self.assertGreaterEqual(len(payload["request"]["text"]), 40)
+        self.assertGreaterEqual(len(payload["connections"]), 2)
+        self.assertLessEqual(len(payload["connections"]), 3)
+        for row in payload["connections"]:
+            self.assertTrue(row["title"])
+            self.assertGreaterEqual(len(row["text"]), 40)
+            self.assertIn(row["source_type"], {"cycle", "aspect", "natal_theme"})
+            self.assertTrue(row.get("canonical_theme"))
+        distinction = payload["core_distinction"]
+        self.assertTrue(distinction["title"])
+        self.assertGreaterEqual(len(distinction["text"]), 40)
+        self.assertTrue(distinction.get("canonical_theme") or distinction.get("provenance"))
+        self.assertGreaterEqual(len(payload["resource"]["text"]), 40)
+        self.assertGreaterEqual(len(payload["takeaway"]), 40)
+        # Whole blocks from library, not Lego quiz labels alone.
+        blob = json.dumps(payload, ensure_ascii=False)
+        self.assertNotIn("В фокусе: отношения, путь", blob)
+
+    def test_blueprint_exposes_request_semantic_fallback(self):
+        from core.services.report_blueprint import build_report_document
+
+        document = build_report_document(
+            natal={
+                "has_birth_time": True,
+                "planets": {
+                    "sun": {"sign": "gemini", "sign_ru": "Близнецы", "sign_index": 2, "degree": 5.0, "house": 7},
+                    "moon": {"sign": "taurus", "sign_ru": "Телец", "sign_index": 1, "degree": 12.0, "house": 6},
+                },
+                "ascendant": {"sign": "scorpio", "sign_ru": "Скорпион", "sign_index": 7, "degree": 5.0},
+                "houses": [{"house": i + 1, "sign": "scorpio", "sign_ru": "Скорпион"} for i in range(12)],
+            },
+            sky_now={"datetime_utc": "2026-08-17T12:00:00Z", "planets": {}},
+            quiz={
+                "focus": ["love"],
+                "focus_labels": ["отношения"],
+                "life_stage": "transition",
+                "intent": "potential",
+                "intent_label": "понять свой потенциал",
+            },
+        )
+        layer = document["interpretive"]["request"]
+        self.assertEqual(layer["source"], "fallback")
+        payload = layer["payload"]
+        self.assertEqual(payload["report_type"], "request")
+        self.assertEqual(payload["source"], "semantic_fallback")
+        self.assertTrue(payload["request"]["text"])
+        self.assertGreaterEqual(len(payload["connections"]), 2)
+
+
+class PracticeFallbackCopyTests(TestCase):
+    def test_practice_selects_whole_module_from_request_theme(self):
+        from core.services.report_practice_fallback import (
+            fallback_practice_interpretation,
+            load_practice_fallback_library,
+        )
+
+        library = load_practice_fallback_library()
+        self.assertEqual(len(library["modules"]), 17)
+        self.assertIn("generic_uncertainty_and_choice", library["modules"])
+
+        document = {
+            "quiz": {
+                "intent_label": "понять свой потенциал",
+                "focus_labels": ["отношения"],
+            },
+            "interpretive": {
+                "request": {
+                    "payload": {
+                        "report_type": "request",
+                        "source": "semantic_fallback",
+                        "request": {"title": "Понять себя", "text": "x" * 50},
+                        "connections": [
+                            {
+                                "source_id": "t_uranus_square_sun",
+                                "source_type": "cycle",
+                                "canonical_theme": "closeness_and_autonomy",
+                                "title": "Близость",
+                                "text": "x" * 50,
+                            }
+                        ],
+                        "core_distinction": {
+                            "canonical_theme": "control_and_uncertainty",
+                            "title": "Ясность ↔ гарантия",
+                            "text": "x" * 50,
+                            "provenance": ["t_uranus_square_sun"],
+                        },
+                        "resource": {
+                            "source_id": "t_jupiter_trine_venus",
+                            "text": "x" * 50,
+                        },
+                    }
+                }
+            },
+        }
+        payload = fallback_practice_interpretation(document)
+        self.assertEqual(payload["report_type"], "practice")
+        self.assertEqual(payload["source"], "semantic_fallback")
+        self.assertEqual(payload["module_id"], "control_and_uncertainty")
+        self.assertIn("гарантия", payload["start_here"]["headline"].lower())
+        self.assertGreaterEqual(len(payload["start_here"]["text"]), 40)
+        self.assertGreaterEqual(len(payload["pattern"]["text"]), 40)
+        self.assertGreaterEqual(len(payload["protective_function"]["text"]), 40)
+        self.assertGreaterEqual(len(payload["cost"]["text"]), 40)
+        self.assertGreaterEqual(len(payload["key_distinctions"]), 1)
+        self.assertGreaterEqual(len(payload["reflection_questions"]), 4)
+        self.assertGreaterEqual(len(payload["experiment"]["text"]), 40)
+        self.assertGreaterEqual(len(payload["observe_over_time"]), 2)
+        self.assertIn("понять свой потенциал", payload["values"]["text"].lower())
+        self.assertIn("t_uranus_square_sun", payload["provenance"])
+        # Whole module, not Lego focus insertion.
+        blob = json.dumps(payload, ensure_ascii=False)
+        self.assertNotIn("Не всякое напряжение в теме", blob)
+
+    def test_practice_falls_back_to_generic_without_theme(self):
+        from core.services.report_practice_fallback import fallback_practice_interpretation
+
+        payload = fallback_practice_interpretation({"quiz": {}, "interpretive": {}})
+        self.assertEqual(payload["module_id"], "generic_uncertainty_and_choice")
+        self.assertEqual(payload["source"], "semantic_fallback")
+        self.assertTrue(payload["start_here"]["headline"])
+
+    def test_blueprint_exposes_practice_semantic_fallback(self):
+        from core.services.report_blueprint import build_report_document
+
+        document = build_report_document(
+            natal={
+                "has_birth_time": True,
+                "planets": {
+                    "sun": {"sign": "gemini", "sign_ru": "Близнецы", "sign_index": 2, "degree": 5.0, "house": 7},
+                    "moon": {"sign": "taurus", "sign_ru": "Телец", "sign_index": 1, "degree": 12.0, "house": 6},
+                },
+                "ascendant": {"sign": "scorpio", "sign_ru": "Скорпион", "sign_index": 7, "degree": 5.0},
+                "houses": [{"house": i + 1, "sign": "scorpio", "sign_ru": "Скорпион"} for i in range(12)],
+            },
+            sky_now={"datetime_utc": "2026-08-17T12:00:00Z", "planets": {}},
+            quiz={
+                "focus": ["love"],
+                "focus_labels": ["отношения"],
+                "life_stage": "transition",
+                "intent": "potential",
+                "intent_label": "понять свой потенциал",
+            },
+        )
+        layer = document["interpretive"]["practice"]
+        self.assertEqual(layer["source"], "fallback")
+        payload = layer["payload"]
+        self.assertEqual(payload["report_type"], "practice")
+        self.assertEqual(payload["source"], "semantic_fallback")
+        self.assertTrue(payload.get("module_id"))
+        self.assertGreaterEqual(len(payload["reflection_questions"]), 4)
+        self.assertTrue(payload["experiment"]["text"])
 
 
 class ReportBlueprintTests(TestCase):
     def test_uranus_sun_conjunction_is_primary_and_prompt_exists(self):
         from core.services.report_blueprint import build_report_document, load_paid_report_prompt
+        from core.services.llm_prompts import load_prompt
         from core.services.report_facts import transits_now
 
         natal = {
@@ -800,6 +2254,7 @@ class ReportBlueprintTests(TestCase):
             "planets": {
                 "sun": {"sign": "leo", "sign_ru": "Лев", "sign_index": 4, "degree": 6.0, "house": 10},
                 "moon": {"sign": "capricorn", "sign_ru": "Козерог", "sign_index": 9, "degree": 12.0, "house": 4},
+                "mercury": {"sign": "leo", "sign_ru": "Лев", "sign_index": 4, "degree": 10.0, "house": 10},
                 "venus": {"sign": "virgo", "sign_ru": "Дева", "sign_index": 5, "degree": 2.0, "house": 11},
                 "mars": {"sign": "gemini", "sign_ru": "Близнецы", "sign_index": 2, "degree": 8.0, "house": 8},
                 "pluto": {"sign": "scorpio", "sign_ru": "Скорпион", "sign_index": 7, "degree": 6.2, "house": 1},
@@ -845,12 +2300,67 @@ class ReportBlueprintTests(TestCase):
         payload = document["generation"]["payload"]
         self.assertEqual(payload["task"], "generate_paid_report")
         self.assertTrue(payload["rules"]["no_predictions"])
+        self.assertIn("aspects", payload["output"]["sections"])
         self.assertIn("cycles", payload["output"]["sections"])
-        self.assertIn("summary", payload["output"]["sections"])
+        self.assertIn("request", payload["output"]["sections"])
+        self.assertIn("practice", payload["output"]["sections"])
+        self.assertEqual(
+            [tab["id"] for tab in document["presentation"]["web"]["tabs"]],
+            ["natal", "aspects", "cycles", "request", "practice"],
+        )
+        self.assertEqual(document["schema_version"], 4)
+        self.assertEqual(document["sections"]["aspects"]["title"], "Аспекты")
+        self.assertEqual(document["sections"]["cycles"]["title"], "Циклы")
+        self.assertEqual(document["sections"]["request"]["title"], "Запрос")
+        self.assertEqual(document["sections"]["practice"]["title"], "Практика")
+        self.assertTrue(
+            any("внутренн" in block["text"] for block in document["sections"]["aspects"]["blocks"])
+        )
         self.assertTrue(document["factual"]["natal"]["wheel"]["planets"])
         prompt = load_paid_report_prompt()
         self.assertIn("сквозная линия", prompt.lower())
         self.assertIn("Не пересчитывай небо", prompt)
+        self.assertFalse(prompt.lstrip().startswith("---"))
+        self.assertNotIn("model:", prompt.split("## Задача", 1)[0])
+        self.assertEqual(document["generation"]["model"], "openai/gpt-5.6-terra-pro")
+        self.assertEqual(document["generation"]["system_prompt_id"], "paid_report")
+        natal_gen = document["generation"]["section_prompts"]["natal"]
+        self.assertEqual(natal_gen["system_prompt_id"], "paid_report_natal")
+        self.assertEqual(natal_gen["model"], "openai/gpt-5.6-luna-pro")
+        natal_prompt = load_prompt("paid_report_natal").body
+        self.assertIn("natal interpretation only", natal_prompt)
+        self.assertIn("Твой внутренний фундамент", natal_prompt)
+        self.assertFalse(natal_prompt.lstrip().startswith("---"))
+        self.assertNotIn("icon: book-open", natal_prompt)
+        aspects_gen = document["generation"]["section_prompts"]["aspects"]
+        cycles_gen = document["generation"]["section_prompts"]["cycles"]
+        request_gen = document["generation"]["section_prompts"]["request"]
+        practice_gen = document["generation"]["section_prompts"]["practice"]
+        self.assertEqual(aspects_gen["system_prompt_id"], "paid_report_aspects")
+        self.assertEqual(cycles_gen["system_prompt_id"], "paid_report_cycles")
+        self.assertEqual(request_gen["system_prompt_id"], "paid_report_request")
+        self.assertEqual(practice_gen["system_prompt_id"], "paid_report_practice")
+        aspects_prompt = load_prompt("paid_report_aspects").body
+        cycles_prompt = load_prompt("paid_report_cycles").body
+        request_prompt = load_prompt("paid_report_request").body
+        practice_prompt = load_prompt("paid_report_practice").body
+        self.assertIn("текущие транзиты", aspects_prompt)
+        self.assertIn("grammatical_gender", aspects_prompt)
+        self.assertIn("Natal Aspects Interpreter", aspects_prompt)
+        self.assertNotIn("icon: git-branch", aspects_prompt)
+        self.assertIn("внутренние аспекты", cycles_prompt)
+        self.assertIn("Current Cycles Interpreter", cycles_prompt)
+        self.assertNotIn("icon: orbit", cycles_prompt)
+        self.assertIn("Запрос", request_prompt)
+        self.assertIn("CONNECTIONS", request_prompt)
+        self.assertIn("connections", request_prompt)
+        self.assertIn("Практика", practice_prompt)
+        self.assertIn("start_here", practice_prompt)
+        natal_layer = document["interpretive"]["natal"]["payload"]
+        self.assertEqual(document["interpretive"]["status"], "fallback")
+        self.assertTrue(natal_layer["core_portrait"]["summary"])
+        self.assertGreater(len(natal_layer["big_three"]["sun"]["body"]), 120)
+        self.assertTrue(any(row["id"] == "mind" for row in natal_layer["sections"]))
 
 
 class SwissPlacidusTests(TestCase):
@@ -971,11 +2481,74 @@ class YandexAuthTests(TestCase):
         me = self.client.get("/api/me/", HTTP_AUTHORIZATION=f"Bearer {data['token']}")
         self.assertEqual(me.status_code, 200)
         self.assertEqual(me.json()["email"], "ivan@yandex.ru")
+        self.assertFalse(me.json()["has_paid_report"])
         report = self.client.get(
             "/api/me/report/",
             HTTP_AUTHORIZATION=f"Bearer {data['token']}",
         )
         self.assertEqual(report.status_code, 404)
+
+    def test_start_without_session_token_creates_session(self):
+        response = self.client.get("/api/auth/yandex/start/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("oauth.yandex.ru/authorize", response.json()["url"])
+
+    def test_me_has_paid_report_when_order_paid(self):
+        user, token = _make_user()
+        session = OnboardingSession.objects.create(user=user)
+        Order.objects.create(
+            idempotency_key="paid-me-1",
+            idempotency_request_hash="b" * 64,
+            session=session,
+            user=user,
+            customer_email="buyer@example.com",
+            product_sku="personal_report",
+            product_name="Персональный разбор Cosmirror",
+            amount=Decimal("777.00"),
+            status=Order.Status.PAID,
+        )
+        me = self.client.get("/api/me/", HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.assertEqual(me.status_code, 200)
+        self.assertTrue(me.json()["has_paid_report"])
+
+    @patch("core.services.yandex_oauth._get_json")
+    @patch("core.services.yandex_oauth._post_form")
+    def test_yandex_get_callback_redirects_paid_user_to_account(self, post_form, get_json):
+        from core.models import YandexOAuthState
+
+        user, _token = _make_user(email="anna@yandex.ru", yandex_id="99")
+        session = OnboardingSession.objects.create(user=user)
+        Order.objects.create(
+            idempotency_key="paid-ya-1",
+            idempotency_request_hash="c" * 64,
+            session=session,
+            user=user,
+            customer_email="anna@yandex.ru",
+            product_sku="personal_report",
+            product_name="Персональный разбор Cosmirror",
+            amount=Decimal("777.00"),
+            status=Order.Status.PAID,
+        )
+        YandexOAuthState.objects.create(
+            nonce="state-paid",
+            session=self.session,
+            code_verifier="verifier",
+            redirect_uri="http://localhost:3000/onboarding/contacts",
+        )
+        post_form.return_value = {"access_token": "ya-token"}
+        get_json.return_value = {
+            "id": "99",
+            "login": "anna",
+            "default_email": "anna@yandex.ru",
+            "display_name": "Анна",
+        }
+        response = self.client.get(
+            "/api/auth/yandex/callback/",
+            {"code": "888", "state": "state-paid"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/account/", response["Location"])
+        self.assertIn("#auth=", response["Location"])
 
     @patch("core.services.yandex_oauth._get_json")
     @patch("core.services.yandex_oauth._post_form")
@@ -1002,6 +2575,144 @@ class YandexAuthTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/onboarding/insight/", response["Location"])
         self.assertIn("#auth=", response["Location"])
+
+    def test_expired_token_is_rejected_and_deleted(self):
+        _user, key = _make_user()
+        token = AuthToken.objects.get(key=key)
+        token.expires_at = timezone.now() - timedelta(seconds=1)
+        token.save(update_fields=["expires_at"])
+        me = self.client.get("/api/me/", HTTP_AUTHORIZATION=f"Bearer {key}")
+        self.assertEqual(me.status_code, 401)
+        self.assertFalse(AuthToken.objects.filter(key=key).exists())
+
+    def test_logout_deletes_token(self):
+        _user, key = _make_user()
+        response = self.client.post("/api/auth/logout/", HTTP_AUTHORIZATION=f"Bearer {key}")
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(AuthToken.objects.filter(key=key).exists())
+
+    def test_new_login_revokes_previous_token(self):
+        user, key = _make_user()
+        issue_auth_token(user)
+        self.assertFalse(AuthToken.objects.filter(key=key).exists())
+        self.assertEqual(AuthToken.objects.filter(user=user).count(), 1)
+
+    @override_settings(DEBUG=True)
+    def test_dev_reset_deletes_orders(self):
+        user, key = _make_user()
+        session = OnboardingSession.objects.create(user=user)
+        Order.objects.create(
+            idempotency_key="dev-reset-1",
+            idempotency_request_hash="d" * 64,
+            session=session,
+            user=user,
+            customer_email="buyer@example.com",
+            product_sku="personal_report",
+            product_name="Персональный разбор Cosmirror",
+            amount=Decimal("777.00"),
+            status=Order.Status.PAID,
+        )
+        response = self.client.post("/api/me/dev-reset/", HTTP_AUTHORIZATION=f"Bearer {key}")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Order.objects.filter(user=user).exists())
+        me = self.client.get("/api/me/", HTTP_AUTHORIZATION=f"Bearer {key}")
+        self.assertFalse(me.json()["has_paid_report"])
+
+    @override_settings(DEBUG=False)
+    def test_dev_reset_hidden_when_not_debug(self):
+        _user, key = _make_user()
+        response = self.client.post("/api/me/dev-reset/", HTTP_AUTHORIZATION=f"Bearer {key}")
+        self.assertEqual(response.status_code, 404)
+
+    @override_settings(AUTH_TOKEN_TTL_DAYS=7)
+    def test_token_ttl_is_seven_days(self):
+        _user, key = _make_user()
+        token = AuthToken.objects.get(key=key)
+        delta = token.expires_at - token.created_at
+        self.assertAlmostEqual(delta.total_seconds(), 7 * 86400, delta=2)
+
+    @override_settings(DEBUG=True)
+    def test_dev_login_issues_empty_session(self):
+        from core.services.yandex_oauth import get_or_create_dev_user
+
+        user = get_or_create_dev_user()
+        session = OnboardingSession.objects.create(user=user)
+        Order.objects.create(
+            idempotency_key="dev-login-wipe",
+            idempotency_request_hash="e" * 64,
+            session=session,
+            user=user,
+            customer_email="dev@localhost",
+            product_sku="personal_report",
+            product_name="Персональный разбор Cosmirror",
+            amount=Decimal("777.00"),
+            status=Order.Status.PAID,
+        )
+        response = self.client.post("/api/auth/dev-login/")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["token"])
+        self.assertFalse(data["user"]["has_paid_report"])
+        self.assertFalse(Order.objects.filter(user=user).exists())
+        me = self.client.get("/api/me/", HTTP_AUTHORIZATION=f"Bearer {data['token']}")
+        self.assertEqual(me.status_code, 200)
+
+    @override_settings(DEBUG=False)
+    def test_dev_login_hidden_when_not_debug(self):
+        response = self.client.post("/api/auth/dev-login/")
+        self.assertEqual(response.status_code, 404)
+
+    @override_settings(DEBUG=True)
+    def test_dev_login_seeds_paid_report(self):
+        response = self.client.post(
+            "/api/auth/dev-login/",
+            {"persona": "report"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["token"])
+        self.assertTrue(data["user"]["has_paid_report"])
+        report = self.client.get(
+            "/api/me/report/",
+            HTTP_AUTHORIZATION=f"Bearer {data['token']}",
+        )
+        self.assertEqual(report.status_code, 200)
+        payload = report.json()
+        self.assertEqual(payload["status"], "paid")
+        self.assertEqual(payload["report"]["schema_version"], 4)
+        self.assertEqual(
+            [section["id"] for section in payload["report"]["sections"]],
+            ["natal", "aspects", "cycles", "request", "practice"],
+        )
+        quiz = payload["report"]["document"].get("quiz") or {}
+        self.assertIn("love", quiz.get("focus") or [])
+        self.assertNotIn("name", quiz)
+        self.assertNotIn("customer_email", payload)
+
+    @override_settings(DEBUG=True)
+    def test_dev_login_seeds_insight_funnel(self):
+        response = self.client.post(
+            "/api/auth/dev-login/",
+            {"persona": "insight"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["token"])
+        self.assertTrue(data["session_token"])
+        self.assertFalse(data["user"]["has_paid_report"])
+        insight = self.client.get(
+            f"/api/onboarding/sessions/{data['session_token']}/insight/",
+        )
+        self.assertEqual(insight.status_code, 200)
+        natal = insight.json().get("natal") or {}
+        self.assertTrue(natal.get("planets"))
+        report = self.client.get(
+            "/api/me/report/",
+            HTTP_AUTHORIZATION=f"Bearer {data['token']}",
+        )
+        self.assertEqual(report.status_code, 404)
 
 
 

@@ -140,9 +140,18 @@ REST_FRAMEWORK = {
 LLM_PROVIDER = (os.getenv("LLM_PROVIDER") or "auto").strip().lower()
 POLZA_API_KEY = (os.getenv("POLZA_API_KEY") or "").strip()
 POLZA_BASE_URL = (os.getenv("POLZA_BASE_URL") or "https://polza.ai/api/v1").strip()
-POLZA_MODEL = (os.getenv("POLZA_MODEL") or "openai/gpt-5.6-terra-pro").strip()
+POLZA_MODEL = (os.getenv("POLZA_MODEL") or "openai/gpt-5.6-luna-pro").strip()
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 GROQ_MODEL = (os.getenv("GROQ_MODEL") or "qwen/qwen3.6-27b").strip()
+# Модель на системный промпт (не fallback). Пусто = frontmatter файла или POLZA_MODEL.
+LLM_MODEL_ONBOARDING_INSIGHT = (os.getenv("LLM_MODEL_ONBOARDING_INSIGHT") or "").strip()
+LLM_MODEL_EDITORIAL = (os.getenv("LLM_MODEL_EDITORIAL") or "").strip()
+LLM_MODEL_PAID_REPORT = (os.getenv("LLM_MODEL_PAID_REPORT") or "").strip()
+LLM_MODEL_PAID_REPORT_NATAL = (os.getenv("LLM_MODEL_PAID_REPORT_NATAL") or "").strip()
+LLM_MODEL_PAID_REPORT_ASPECTS = (os.getenv("LLM_MODEL_PAID_REPORT_ASPECTS") or "").strip()
+LLM_MODEL_PAID_REPORT_CYCLES = (os.getenv("LLM_MODEL_PAID_REPORT_CYCLES") or "").strip()
+LLM_MODEL_PAID_REPORT_REQUEST = (os.getenv("LLM_MODEL_PAID_REPORT_REQUEST") or "").strip()
+LLM_MODEL_PAID_REPORT_PRACTICE = (os.getenv("LLM_MODEL_PAID_REPORT_PRACTICE") or "").strip()
 
 # Публичные URL (редиректы после оплаты + webhook для Prodamus)
 FRONTEND_URL = (os.getenv("FRONTEND_URL") or "http://localhost:3000").rstrip("/")
@@ -154,6 +163,9 @@ YANDEX_OAUTH_CLIENT_SECRET = (os.getenv("YANDEX_OAUTH_CLIENT_SECRET") or "").str
 YANDEX_OAUTH_REDIRECT_URI = (
     os.getenv("YANDEX_OAUTH_REDIRECT_URI") or f"{FRONTEND_URL}/onboarding/contacts"
 ).strip()
+
+# Срок жизни Bearer-токена после Яндекс ID. 0 = запрещено (не используем).
+AUTH_TOKEN_TTL_DAYS = int(os.getenv("AUTH_TOKEN_TTL_DAYS") or "7")
 
 # Товар по умолчанию. Имя попадает в чек (54-ФЗ, до 128 символов).
 COSMIRROR_PRODUCT_SKU = (os.getenv("COSMIRROR_PRODUCT_SKU") or "personal_report").strip()

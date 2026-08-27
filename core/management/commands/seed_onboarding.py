@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from django.core.management.base import BaseCommand
 
-from core.models import OnboardingStep
+from core.models import OnboardingSession, OnboardingStep, OnboardingStepAnswer
 
 
 # Каждый экран квиза = отдельный OnboardingStep → /onboarding/<slug>/
@@ -136,12 +138,24 @@ QUIZ_TITLES = {
     "astrology_trigger": "Триггер",
 }
 
+# URL /onboarding/<slug>/ — не обязан совпадать с id поля в payload.
+QUIZ_URL_SLUGS = {
+    "name": "name",
+    "gender": "gender",
+    "age": "age",
+    "life_stage": "life_stage",
+    "focus": "focus",
+    "intent": "goal",
+    "chart_knowledge": "astrolevel",
+    "astrology_trigger": "questions",
+}
+
 
 def _build_default_steps():
     steps = []
     order = 10
     for screen in PROFILE_QUIZ_SCREENS:
-        slug = screen["id"]
+        slug = QUIZ_URL_SLUGS.get(screen["id"], screen["id"])
         steps.append(
             {
                 "slug": slug,
@@ -199,8 +213,29 @@ def _build_default_steps():
     return steps
 
 
-# Старый монолитный шаг — выключаем, чтобы не дублировать квиз.
+# Старый монолитный шаг и прежние URL квиза — выключаем после переименования.
 LEGACY_INACTIVE_SLUGS = ("welcome",)
+SLUG_RENAMES = {
+    "intent": "goal",
+    "chart_knowledge": "astrolevel",
+    "astrology_trigger": "questions",
+}
+
+
+def _rename_slug(old: str, new: str) -> str | None:
+    old_step = OnboardingStep.objects.filter(slug=old).first()
+    new_step = OnboardingStep.objects.filter(slug=new).first()
+    OnboardingSession.objects.filter(current_step_slug=old).update(current_step_slug=new)
+    if old_step and not new_step:
+        old_step.slug = new
+        old_step.save(update_fields=["slug", "updated_at"])
+        return f"  ~ renamed /onboarding/{old}/ → /onboarding/{new}/"
+    if old_step and new_step and old_step.pk != new_step.pk:
+        OnboardingStepAnswer.objects.filter(step=old_step).update(step=new_step)
+        old_step.is_active = False
+        old_step.save(update_fields=["is_active", "updated_at"])
+        return f"  - merged /onboarding/{old}/ into /onboarding/{new}/"
+    return None
 
 
 class Command(BaseCommand):
@@ -209,6 +244,10 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         created = 0
         updated = 0
+        for old, new in SLUG_RENAMES.items():
+            note = _rename_slug(old, new)
+            if note:
+                self.stdout.write(note)
         for data in _build_default_steps():
             obj, was_created = OnboardingStep.objects.update_or_create(
                 slug=data["slug"],

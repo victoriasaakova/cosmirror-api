@@ -187,6 +187,7 @@ class OrderAdmin(admin.ModelAdmin):
         "payment_url",
         "prodamus_order_id",
         "webhook_payload",
+        "interpretive",
         "created_at",
         "updated_at",
         "paid_at",

@@ -44,6 +44,28 @@ def _as_list(value: Any) -> list[str]:
     return []
 
 
+_FEMALE = frozenset({"female", "f", "woman", "женский", "жен"})
+_MALE = frozenset({"male", "m", "man", "мужской", "муж"})
+
+
+def grammatical_gender(quiz: dict[str, Any] | None) -> str:
+    """feminine | masculine | unspecified. Только квиз, не карта."""
+    raw = str((quiz or {}).get("gender") or "").strip().lower()
+    if raw in _FEMALE:
+        return "feminine"
+    if raw in _MALE:
+        return "masculine"
+    return "unspecified"
+
+
+def reader_voice(quiz: dict[str, Any] | None) -> dict[str, str]:
+    """Как обращаться в user-facing тексте отчёта."""
+    return {
+        "address": "ты",
+        "grammatical_gender": grammatical_gender(quiz),
+    }
+
+
 def quiz_profile(quiz: dict[str, Any] | None) -> dict[str, Any]:
     quiz = quiz or {}
     focus = _as_list(quiz.get("focus"))

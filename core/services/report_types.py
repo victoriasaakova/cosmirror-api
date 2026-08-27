@@ -11,26 +11,38 @@
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 3
+# 4: вкладки «Аспекты» (натал–натал) и «Циклы» (транзиты) разведены.
+SCHEMA_VERSION = 4
 SYSTEM_PROMPT_ID = "paid_report"
 
 SECTION_NATAL = "natal"
+SECTION_ASPECTS = "aspects"
 SECTION_CYCLES = "cycles"
 SECTION_REQUEST = "request"
-SECTION_SUMMARY = "summary"
+SECTION_PRACTICE = "practice"
 
 WEB_TABS: list[dict[str, str]] = [
     {"id": SECTION_NATAL, "label": "Твоя карта", "hint": "Солнце, Луна, Асцендент, дома и положения"},
-    {"id": SECTION_CYCLES, "label": "Аспекты и циклы", "hint": "напряжение, ресурс и как с ними работать"},
-    {"id": SECTION_REQUEST, "label": "Запрос", "hint": "как твой вопрос связан с текущими циклами"},
-    {"id": SECTION_SUMMARY, "label": "Саммари", "hint": "что идёт сейчас и что будет дальше"},
+    {"id": SECTION_ASPECTS, "label": "Аспекты", "hint": "как темы внутри карты связаны между собой"},
+    {"id": SECTION_CYCLES, "label": "Циклы", "hint": "что звучит сейчас во внешнем небе"},
+    {
+        "id": SECTION_REQUEST,
+        "label": "Запрос",
+        "hint": "как твой вопрос пересекается с картой и текущим периодом",
+    },
+    {
+        "id": SECTION_PRACTICE,
+        "label": "Практика",
+        "hint": "что проверить в опыте и как исследовать найденную тему",
+    },
 ]
 
 PDF_OUTLINE: list[str] = [
     SECTION_NATAL,
+    SECTION_ASPECTS,
     SECTION_CYCLES,
     SECTION_REQUEST,
-    SECTION_SUMMARY,
+    SECTION_PRACTICE,
 ]
 
 # --- Planets / points ----------------------------------------------------
@@ -48,7 +60,33 @@ PLANET_ORDER = (
     "pluto",
 )
 
+WHEEL_BODY_ORDER = PLANET_ORDER + (
+    "north_node",
+    "south_node",
+    "chiron",
+    "vesta",
+)
+
+# The Pattern wheel: classical planets only, no conjunction lines,
+# no outer-to-outer web, no lines to nodes/Chiron/Vesta/angles.
+WHEEL_ASPECT_BODIES = PLANET_ORDER
+WHEEL_ASPECT_KINDS = frozenset({"square", "opposition", "trine", "sextile"})
+WHEEL_ASPECT_OUTER = frozenset({"uranus", "neptune", "pluto"})
+WHEEL_ASPECT_MAX_ORB = {
+    "square": 6.0,
+    "opposition": 6.0,
+    "trine": 5.5,
+    "sextile": 3.5,
+}
+
 ANGLE_ORDER = ("ascendant", "midheaven")
+
+ENGINE_ANGLE_IDS = {
+    "asc": "ascendant",
+    "mc": "midheaven",
+    "dsc": "descendant",
+    "ic": "ic",
+}
 
 PLANET_GLYPH = {
     "sun": "☉",
@@ -61,8 +99,14 @@ PLANET_GLYPH = {
     "uranus": "♅",
     "neptune": "♆",
     "pluto": "♇",
+    "north_node": "☊",
+    "south_node": "☋",
+    "chiron": "⚷",
+    "vesta": "⚶",
     "ascendant": "Asc",
     "midheaven": "MC",
+    "descendant": "Ds",
+    "ic": "IC",
 }
 
 PLANET_RU = {
@@ -76,8 +120,14 @@ PLANET_RU = {
     "uranus": "Уран",
     "neptune": "Нептун",
     "pluto": "Плутон",
+    "north_node": "Северный узел",
+    "south_node": "Южный узел",
+    "chiron": "Хирон",
+    "vesta": "Веста",
     "ascendant": "Асцендент",
     "midheaven": "Середина неба",
+    "descendant": "Десцендент",
+    "ic": "Надир",
 }
 
 # Вес точки, по которой бьёт транзит: светила и углы важнее внешних натальных.

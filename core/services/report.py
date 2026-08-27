@@ -9,7 +9,38 @@ from core.models import NatalChart, Order
 from core.services.frontend import public_frontend_base
 from core.services.natal import calculate_natal, calculate_sky_now
 from core.services.personalize import quiz_from_session
+from core.services import llm_client
 from core.services.report_blueprint import build_report_document, flatten_document_sections
+from core.services.report_aspects import (
+    apply_aspects_to_document,
+    cached_aspects_layer,
+    generate_aspects_interpretation,
+    save_aspects_layer,
+)
+from core.services.report_cycles import (
+    apply_cycles_to_document,
+    cached_cycles_layer,
+    generate_cycles_interpretation,
+    save_cycles_layer,
+)
+from core.services.report_natal import (
+    apply_natal_to_document,
+    cached_natal_layer,
+    generate_natal_interpretation,
+    save_natal_layer,
+)
+from core.services.report_request import (
+    apply_request_to_document,
+    cached_request_layer,
+    generate_request_interpretation,
+    save_request_layer,
+)
+from core.services.report_practice import (
+    apply_practice_to_document,
+    cached_practice_layer,
+    generate_practice_interpretation,
+    save_practice_layer,
+)
 
 
 def report_page_url(order: Order | None = None) -> str:
@@ -39,12 +70,70 @@ def build_paid_report(order: Order) -> dict[str, Any]:
         quiz=quiz,
         person={},
     )
+    # Sealed LLM-слой отдаём только если провайдер включён.
+    # LLM_PROVIDER=off → всегда живой YAML-fallback (удобно для QA).
+    if llm_client.is_configured():
+        cached = cached_natal_layer(order, document)
+        if cached:
+            apply_natal_to_document(
+                document,
+                cached["payload"],
+                source=str(cached.get("source") or "llm"),
+                model=str(cached.get("model") or ""),
+            )
+        cached_aspects = cached_aspects_layer(order, document)
+        if cached_aspects:
+            apply_aspects_to_document(
+                document,
+                cached_aspects["payload"],
+                source=str(cached_aspects.get("source") or "llm"),
+                model=str(cached_aspects.get("model") or ""),
+            )
+        cached_cycles = cached_cycles_layer(order, document)
+        if cached_cycles:
+            apply_cycles_to_document(
+                document,
+                cached_cycles["payload"],
+                source=str(cached_cycles.get("source") or "llm"),
+                model=str(cached_cycles.get("model") or ""),
+                error=str(cached_cycles.get("error") or ""),
+                generation_status=str(cached_cycles.get("generation_status") or ""),
+            )
+        cached_request = cached_request_layer(order, document)
+        if cached_request:
+            apply_request_to_document(
+                document,
+                cached_request["payload"],
+                source=str(cached_request.get("source") or "llm"),
+                model=str(cached_request.get("model") or ""),
+                error=str(cached_request.get("error") or ""),
+            )
+        cached_practice = cached_practice_layer(order, document)
+        if cached_practice:
+            apply_practice_to_document(
+                document,
+                cached_practice["payload"],
+                source=str(cached_practice.get("source") or "llm"),
+                model=str(cached_practice.get("model") or ""),
+                error=str(cached_practice.get("error") or ""),
+            )
+        job = (order.interpretive or {}).get("generation") if isinstance(order.interpretive, dict) else None
+        if isinstance(job, dict):
+            interpretive = document.setdefault("interpretive", {})
+            interpretive["generation"] = {"status": str(job.get("status") or "idle")}
     sections = flatten_document_sections(document)
+    owner = _person_block(order, natal)
 
     return {
         "title": "Персональный астрологический отчёт",
         "subtitle": _subtitle(document, natal),
         "schema_version": document.get("schema_version"),
+        "person": {
+            "birth_date": owner.get("birth_date") or "",
+            "birth_time": owner.get("birth_time") or "",
+            "birth_place": owner.get("birth_place") or "",
+            "has_birth_time": bool(owner.get("has_birth_time")),
+        },
         "document": document,
         "sections": sections,
         "disclaimer": (
@@ -56,9 +145,8 @@ def build_paid_report(order: Order) -> dict[str, Any]:
 
 
 def public_paid_report(order: Order) -> dict[str, Any]:
-    """Отчёт для кабинета: без ФИО, даты рождения, почты и внутренних payload."""
+    """Отчёт для кабинета: без ФИО, почты и внутренних payload. Дата рождения нужна шапке карты."""
     report = build_paid_report(order)
-    report.pop("person", None)
     document = report.get("document")
     if isinstance(document, dict):
         quiz = document.get("quiz")
@@ -70,7 +158,125 @@ def public_paid_report(order: Order) -> dict[str, Any]:
         natal = ((document.get("factual") or {}).get("natal") or {})
         if isinstance(natal, dict):
             natal.pop("location", None)
+    person = report.get("person")
+    if isinstance(person, dict):
+        person.pop("name", None)
     return report
+
+
+def generate_natal_section(order: Order, *, force: bool = False) -> dict[str, Any]:
+    """Собрать слой «Твоя карта» через скилл. Повтор без force отдаёт кэш LLM."""
+    from core.services.report_jobs import acquire_section, release_section
+
+    if not llm_client.is_configured():
+        return public_paid_report(order)
+    report = build_paid_report(order)
+    document = report.get("document")
+    if not isinstance(document, dict):
+        return public_paid_report(order)
+    cached = cached_natal_layer(order, document)
+    if cached and cached.get("source") == "llm" and not force:
+        return public_paid_report(order)
+    if not acquire_section(order.pk, "natal"):
+        return public_paid_report(order)
+    try:
+        result = generate_natal_interpretation(document)
+        save_natal_layer(order, document, result)
+    finally:
+        release_section(order.pk, "natal")
+    return public_paid_report(order)
+
+
+def generate_aspects_section(order: Order, *, force: bool = False) -> dict[str, Any]:
+    """Собрать слой «Аспекты» через скилл. Повтор без force отдаёт кэш LLM."""
+    from core.services.report_jobs import acquire_section, release_section
+
+    if not llm_client.is_configured():
+        return public_paid_report(order)
+    report = build_paid_report(order)
+    document = report.get("document")
+    if not isinstance(document, dict):
+        return public_paid_report(order)
+    cached = cached_aspects_layer(order, document)
+    if cached and cached.get("source") == "llm" and not force:
+        return public_paid_report(order)
+    if not acquire_section(order.pk, "aspects"):
+        return public_paid_report(order)
+    try:
+        result = generate_aspects_interpretation(document)
+        save_aspects_layer(order, document, result)
+    finally:
+        release_section(order.pk, "aspects")
+    return public_paid_report(order)
+
+
+def generate_cycles_section(order: Order, *, force: bool = False) -> dict[str, Any]:
+    """Собрать слой «Циклы» через скилл. Повтор без force отдаёт кэш LLM."""
+    from core.services.report_jobs import acquire_section, release_section
+
+    if not llm_client.is_configured():
+        return public_paid_report(order)
+    report = build_paid_report(order)
+    document = report.get("document")
+    if not isinstance(document, dict):
+        return public_paid_report(order)
+    cached = cached_cycles_layer(order, document)
+    if cached and cached.get("source") == "llm" and not force:
+        return public_paid_report(order)
+    if not acquire_section(order.pk, "cycles"):
+        return public_paid_report(order)
+    try:
+        result = generate_cycles_interpretation(document)
+        save_cycles_layer(order, document, result)
+    finally:
+        release_section(order.pk, "cycles")
+    return public_paid_report(order)
+
+
+def generate_request_section(order: Order, *, force: bool = False) -> dict[str, Any]:
+    """Собрать вкладку «Запрос» через скилл paid_report_request."""
+    from core.services.report_jobs import acquire_section, release_section
+
+    if not llm_client.is_configured():
+        return public_paid_report(order)
+    report = build_paid_report(order)
+    document = report.get("document")
+    if not isinstance(document, dict):
+        return public_paid_report(order)
+    cached = cached_request_layer(order, document)
+    if cached and cached.get("source") == "llm" and not force:
+        return public_paid_report(order)
+    if not acquire_section(order.pk, "request"):
+        return public_paid_report(order)
+    try:
+        result = generate_request_interpretation(document)
+        save_request_layer(order, document, result)
+    finally:
+        release_section(order.pk, "request")
+    return public_paid_report(order)
+
+
+def generate_practice_section(order: Order, *, force: bool = False) -> dict[str, Any]:
+    """Собрать вкладку «Практика» через скилл paid_report_practice."""
+    from core.services.report_jobs import acquire_section, release_section
+
+    if not llm_client.is_configured():
+        return public_paid_report(order)
+    report = build_paid_report(order)
+    document = report.get("document")
+    if not isinstance(document, dict):
+        return public_paid_report(order)
+    cached = cached_practice_layer(order, document)
+    if cached and cached.get("source") == "llm" and not force:
+        return public_paid_report(order)
+    if not acquire_section(order.pk, "practice"):
+        return public_paid_report(order)
+    try:
+        result = generate_practice_interpretation(document)
+        save_practice_layer(order, document, result)
+    finally:
+        release_section(order.pk, "practice")
+    return public_paid_report(order)
 
 
 def _subtitle(document: dict[str, Any], natal: dict[str, Any]) -> str:

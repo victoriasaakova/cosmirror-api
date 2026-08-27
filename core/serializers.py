@@ -446,7 +446,25 @@ class OrderSerializer(serializers.ModelSerializer):
             return None
         from core.services.report import public_paid_report
 
-        return public_paid_report(order)
+        try:
+            return public_paid_report(order)
+        except Exception:
+            # Never blank the cabinet: design/QA must open the shell even if a layer fails.
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "public_paid_report failed for order %s", order.pk
+            )
+            return {
+                "title": "Персональный астрологический отчёт",
+                "subtitle": "",
+                "document": {"interpretive": {"status": "fallback"}, "sections": {}},
+                "sections": [],
+                "disclaimer": (
+                    "Это не прогноз будущего и не замена терапии. "
+                    "Расчёт — Swiss Ephemeris, тропический зодиак, дома Плацидуса."
+                ),
+            }
 
     def get_report_pdf_url(self, order: Order) -> str:
         if order.status != Order.Status.PAID:

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
@@ -41,15 +42,44 @@ class NatalCalcError(Exception):
     pass
 
 
-def local_to_utc(
+def normalize_longitude(value: float) -> float:
+    return float(value) % 360.0
+
+
+def angular_distance(a: float, b: float) -> float:
+    diff = abs((float(a) - float(b)) % 360.0)
+    return min(diff, 360.0 - diff)
+
+
+def format_utc_offset(delta: Optional[timedelta]) -> str:
+    if delta is None:
+        return "+00:00"
+    total = int(delta.total_seconds())
+    sign = "+" if total >= 0 else "-"
+    total = abs(total)
+    hours, rem = divmod(total, 3600)
+    minutes = rem // 60
+    return f"{sign}{hours:02d}:{minutes:02d}"
+
+
+@dataclass(frozen=True)
+class BirthMoment:
+    local_dt: datetime
+    utc_dt: datetime
+    has_time: bool
+    timezone_id: str
+    utc_offset: str
+    used_noon_fallback: bool
+
+
+def resolve_birth_moment(
     birth_date: date,
     birth_time: Optional[time],
     tz_name: str,
-) -> tuple[datetime, bool]:
-    """
-    Местное время → UTC.
-    Без времени: полдень местного — стандарт для космограммы без Asc.
-    """
+) -> BirthMoment:
+    """Местное время → UTC через IANA timezone (исторический DST)."""
+    if not tz_name:
+        raise NatalCalcError("Не задана таймзона")
     has_time = birth_time is not None
     local_t = birth_time if has_time else time(12, 0)
     try:
@@ -66,19 +96,51 @@ def local_to_utc(
         local_t.second or 0,
         tzinfo=tz,
     )
-    return local_dt.astimezone(timezone.utc), has_time
+    utc_dt = local_dt.astimezone(timezone.utc)
+    return BirthMoment(
+        local_dt=local_dt,
+        utc_dt=utc_dt,
+        has_time=has_time,
+        timezone_id=tz_name,
+        utc_offset=format_utc_offset(local_dt.utcoffset()),
+        used_noon_fallback=not has_time,
+    )
+
+
+def local_to_utc(
+    birth_date: date,
+    birth_time: Optional[time],
+    tz_name: str,
+) -> tuple[datetime, bool]:
+    """
+    Местное время → UTC.
+    Без времени: полдень местного — только технический якорь для планет, не для домов.
+    """
+    moment = resolve_birth_moment(birth_date, birth_time, tz_name)
+    return moment.utc_dt, moment.has_time
 
 
 def sign_of(longitude: float) -> dict[str, Any]:
-    lon = longitude % 360.0
+    lon = normalize_longitude(longitude)
     idx = int(lon // 30) % 12
+    degree_in_sign = lon % 30.0
+    degree = int(degree_in_sign)
+    minute = int(round((degree_in_sign - degree) * 60.0))
+    if minute == 60:
+        degree += 1
+        minute = 0
+        if degree == 30:
+            degree = 0
+            idx = (idx + 1) % 12
     key = SIGNS[idx]
     return {
         "sign": key,
         "sign_ru": SIGNS_RU[key],
         "sign_index": idx,
-        "degree": round(lon % 30, 2),
-        "longitude": round(lon, 4),
+        "degree": degree,
+        "minute": minute,
+        "degree_in_sign": round(degree_in_sign, 4),
+        "longitude": round(lon, 6),
     }
 
 
@@ -111,6 +173,12 @@ def house_of_longitude(longitude: float, cusps: list[float]) -> int:
         if in_house_arc(longitude, cusps[i], cusps[(i + 1) % 12]):
             return i + 1
     return 12
+
+
+def nearest_cusp_distance(longitude: float, cusps: list[float]) -> float:
+    if not cusps:
+        return 0.0
+    return min(angular_distance(longitude, cusp) for cusp in cusps)
 
 
 def houses_from_cusps(cusps: list[float]) -> list[dict[str, Any]]:

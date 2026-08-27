@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 
@@ -21,6 +22,9 @@ class BearerTokenAuthentication(BaseAuthentication):
             return None
         token = AuthToken.objects.select_related("user").filter(key=key).first()
         if token is None or not token.user.is_active:
+            raise AuthenticationFailed("Сессия истекла. Войди через Яндекс ID.")
+        if token.expires_at <= timezone.now():
+            token.delete()
             raise AuthenticationFailed("Сессия истекла. Войди через Яндекс ID.")
         return (token.user, token)
 

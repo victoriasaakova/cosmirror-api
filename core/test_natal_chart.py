@@ -1,0 +1,161 @@
+"""Golden tests for Skill 01 natal calculation (Swiss Ephemeris)."""
+
+from __future__ import annotations
+
+from datetime import date, time
+
+from django.test import TestCase
+
+from core.services.natal_common import NatalCalcError, angular_distance, normalize_longitude
+from core.services.swiss_engine import calculate_natal
+
+GDYNIA = dict(
+    birth_date=date(1995, 5, 26),
+    birth_time=time(19, 25),
+    latitude=54.516498,
+    longitude=18.540274,
+    timezone_name="Europe/Warsaw",
+    place="Gdynia",
+)
+
+
+def _body(natal: dict, key: str) -> dict:
+    return next(row for row in natal["bodies"] if row["id"] == key)
+
+
+class NatalChartSkillTests(TestCase):
+    def test_gdynia_golden_fixture_matches_pattern_reference(self):
+        natal = calculate_natal(**GDYNIA)
+        self.assertEqual(natal["schema_version"], "natal-chart-v1")
+        self.assertEqual(natal["calculation"]["zodiac"], "tropical")
+        self.assertEqual(natal["calculation"]["house_system"], "Placidus")
+        self.assertEqual(natal["calculation"]["node_type"], "true")
+        self.assertEqual(natal["birth"]["utc_offset"], "+02:00")
+        self.assertTrue(natal["birth"]["utc_datetime"].startswith("1995-05-26T17:25:00"))
+
+        self.assertEqual(natal["ascendant"]["sign"], "scorpio")
+        self.assertAlmostEqual(natal["ascendant"]["longitude"], 229.58, delta=0.08)
+        self.assertEqual(natal["midheaven"]["sign"], "virgo")
+        self.assertAlmostEqual(natal["midheaven"]["longitude"], 162.22, delta=0.08)
+
+        sun = _body(natal, "sun")
+        moon = _body(natal, "moon")
+        venus = _body(natal, "venus")
+        mercury = _body(natal, "mercury")
+        jupiter = _body(natal, "jupiter")
+        node = _body(natal, "north_node")
+
+        self.assertEqual(sun["sign"], "gemini")
+        self.assertAlmostEqual(sun["longitude"], 65.00, delta=0.05)
+        self.assertEqual(moon["sign"], "taurus")
+        self.assertAlmostEqual(moon["longitude"], 35.84, delta=0.05)
+        self.assertEqual(venus["sign"], "taurus")
+        self.assertAlmostEqual(venus["longitude"], 41.83, delta=0.05)
+        self.assertEqual(mercury["sign"], "gemini")
+        self.assertAlmostEqual(mercury["longitude"], 78.15, delta=0.05)
+        self.assertTrue(mercury["retrograde"])
+        self.assertEqual(jupiter["sign"], "sagittarius")
+        self.assertAlmostEqual(jupiter["longitude"], 251.25, delta=0.05)
+        self.assertEqual(node["sign"], "scorpio")
+        self.assertAlmostEqual(node["longitude"], 215.47, delta=0.05)
+
+        self.assertAlmostEqual(_body(natal, "south_node")["longitude"], (node["longitude"] + 180) % 360, delta=0.001)
+        self.assertIn("chiron", {row["id"] for row in natal["bodies"]})
+        self.assertIn("vesta", {row["id"] for row in natal["bodies"]})
+        self.assertIsNotNone(natal["vertex"])
+        self.assertEqual(len(natal["houses"]), 12)
+        self.assertEqual(natal["houses"][0]["house"], 1)
+        self.assertTrue(natal["aspects"])
+        self.assertIn("applying", natal["aspects"][0])
+        self.assertFalse(any("theme" in row for row in natal["aspects"]))
+
+        from core.services.report_facts import chart_wheel, natal_aspects
+        from core.services.report_types import PLANET_ORDER
+
+        wheel = chart_wheel(natal, natal_aspects(natal))
+        self.assertTrue(wheel["aspects"])
+        self.assertTrue(all(row["aspect"] != "conjunction" for row in wheel["aspects"]))
+        self.assertTrue(all(row["a"] in PLANET_ORDER and row["b"] in PLANET_ORDER for row in wheel["aspects"]))
+
+    def test_unknown_birth_time_omits_angles_and_houses(self):
+        natal = calculate_natal(
+            birth_date=date(1995, 5, 26),
+            birth_time=None,
+            latitude=54.516498,
+            longitude=18.540274,
+            timezone_name="Europe/Warsaw",
+            place="Gdynia",
+        )
+        self.assertFalse(natal["has_birth_time"])
+        self.assertIsNone(natal["ascendant"])
+        self.assertIsNone(natal["midheaven"])
+        self.assertIsNone(natal["houses"])
+        self.assertIsNone(_body(natal, "sun")["house"])
+        self.assertTrue(natal["validation"]["warnings"])
+
+    def test_winter_offset_without_dst(self):
+        natal = calculate_natal(
+            birth_date=date(1995, 1, 15),
+            birth_time=time(19, 25),
+            latitude=54.516498,
+            longitude=18.540274,
+            timezone_name="Europe/Warsaw",
+            place="Gdynia",
+        )
+        self.assertEqual(natal["birth"]["utc_offset"], "+01:00")
+
+    def test_unknown_timezone_fails_loudly(self):
+        with self.assertRaises(NatalCalcError):
+            calculate_natal(
+                birth_date=date(1995, 5, 26),
+                birth_time=time(19, 25),
+                latitude=54.5,
+                longitude=18.5,
+                timezone_name="Not/AZone",
+                place="X",
+            )
+
+    def test_aspect_wraps_zero_longitude(self):
+        self.assertAlmostEqual(angular_distance(359.0, 1.0), 2.0, places=4)
+        self.assertEqual(normalize_longitude(-10), 350.0)
+
+    def test_helsinki_latitude_returns_twelve_cusps(self):
+        natal = calculate_natal(
+            birth_date=date(1995, 5, 26),
+            birth_time=time(12, 0),
+            latitude=60.1699,
+            longitude=24.9384,
+            timezone_name="Europe/Helsinki",
+            place="Helsinki",
+        )
+        self.assertEqual(len(natal["houses"]), 12)
+        self.assertTrue(natal["has_birth_time"])
+
+    def test_high_latitude_placidus_fails_loudly(self):
+        with self.assertRaises(NatalCalcError):
+            calculate_natal(
+                birth_date=date(1995, 5, 26),
+                birth_time=time(12, 0),
+                latitude=69.6492,
+                longitude=18.9553,
+                timezone_name="Europe/Oslo",
+                place="Tromso",
+            )
+
+    def test_onboarding_insight_always_has_cycle_hits(self):
+        from core.services.insight import build_insight
+        from core.services.swiss_engine import calculate_sky_now
+
+        natal = calculate_natal(
+            birth_date=date(1993, 8, 21),
+            birth_time=time(9, 45),
+            latitude=55.7558,
+            longitude=37.6173,
+            timezone_name="Europe/Moscow",
+            place="Москва",
+        )
+        insight = build_insight(natal, calculate_sky_now())
+        keys = [item["key"] for item in insight["influences"]]
+        self.assertTrue(keys)
+        self.assertNotIn("general_watch", keys)
+        self.assertIn("saturn_on_moon", keys)

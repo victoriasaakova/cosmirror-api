@@ -1,9 +1,13 @@
 """
 Унифицированный LLM-клиент для персонализации разборов.
 
-Приоритет провайдеров (LLM_PROVIDER=auto):
+Провайдер (LLM_PROVIDER=auto):
   1. Polza.ai — https://polza.ai/docs (OpenAI-compatible, без VPN из РФ)
-  2. Groq — legacy fallback
+  2. Groq — legacy
+  LLM_PROVIDER=off|none|disabled — не звонить в API.
+
+Модель выбирается по prompt_id (разные системные промпты → разные модели),
+не как запасной канал. См. core.services.llm_prompts.
 """
 
 from __future__ import annotations
@@ -14,6 +18,8 @@ import re
 from typing import Any, Optional
 
 from django.conf import settings
+
+from core.services.llm_prompts import resolve_model
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +40,8 @@ def active_provider() -> Optional[str]:
     polza_key = (getattr(settings, "POLZA_API_KEY", "") or "").strip()
     groq_key = (getattr(settings, "GROQ_API_KEY", "") or "").strip()
 
+    if forced in ("none", "off", "disabled"):
+        return None
     if forced == "polza":
         return "polza" if polza_key else None
     if forced == "groq":
@@ -50,6 +58,7 @@ def chat_json(
     *,
     system: str,
     user: str,
+    prompt_id: Optional[str] = None,
     model: Optional[str] = None,
     temperature: float = 0.6,
     max_tokens: int = 2500,
@@ -58,11 +67,13 @@ def chat_json(
     if not provider:
         raise LLMError("No LLM API key configured (POLZA_API_KEY or GROQ_API_KEY)")
 
+    model_name = resolve_model(prompt_id, model=model)
+
     if provider == "polza":
         return _polza_chat_json(
             system=system,
             user=user,
-            model=model,
+            model=model_name,
             temperature=temperature,
             max_tokens=max_tokens,
         )
@@ -73,7 +84,7 @@ def chat_json(
         return groq_client.chat_json(
             system=system,
             user=user,
-            model=model,
+            model=model_name,
             temperature=temperature,
             max_tokens=max_tokens,
         )
@@ -93,9 +104,7 @@ def _polza_chat_json(
     if not api_key:
         raise LLMError("POLZA_API_KEY is not configured")
 
-    model_name = (
-        model or getattr(settings, "POLZA_MODEL", "") or "openai/gpt-5.6-terra-pro"
-    ).strip()
+    model_name = (model or getattr(settings, "POLZA_MODEL", "") or "openai/gpt-5.6-luna-pro").strip()
     base_url = (
         getattr(settings, "POLZA_BASE_URL", "") or "https://polza.ai/api/v1"
     ).strip()
@@ -106,7 +115,7 @@ def _polza_chat_json(
         raise LLMError("openai package is not installed") from exc
 
     try:
-        client = OpenAI(api_key=api_key, base_url=base_url, timeout=120.0)
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=180.0)
         completion = client.chat.completions.create(
             model=model_name,
             temperature=temperature,

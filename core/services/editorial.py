@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core.services import llm_client
+from core.services.llm_prompts import PROMPT_EDITORIAL, load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ content_type: {content_type}
 def load_editorial_system() -> str:
     if not _EDITORIAL_PATH.exists():
         raise FileNotFoundError(f"Editorial system prompt not found: {_EDITORIAL_PATH}")
-    return _EDITORIAL_PATH.read_text(encoding="utf-8").strip()
+    return load_prompt(PROMPT_EDITORIAL).body.strip()
 
 
 def editorial_system_prompt(*, content_type: str = "onboarding_insight") -> str:
@@ -238,6 +239,7 @@ def edit_user_facing_texts(
         edited = llm_client.chat_json(
             system=editorial_system_prompt(content_type=content_type),
             user=user,
+            prompt_id=PROMPT_EDITORIAL,
             temperature=0.45,
             max_tokens=3500,
         )

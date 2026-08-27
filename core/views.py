@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 from .authentication import BearerTokenAuthentication
 from .models import (
+    AuthToken,
     GlobalPlanetaryCycle,
     JournalEntry,
     NatalChart,
@@ -58,6 +59,8 @@ from .services.yandex_oauth import (
     build_authorize_url,
     complete_yandex_login,
     exchange_code,
+    get_or_create_dev_user,
+    issue_auth_token,
     resolve_redirect_uri,
 )
 
@@ -110,23 +113,35 @@ class HealthView(APIView):
         return Response({"status": "ok", "service": "cosmirror-api"})
 
 
+def _has_paid_report(user) -> bool:
+    order = _latest_order_for(user)
+    return bool(order and order.status == Order.Status.PAID)
+
+
 class MeView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     authentication_classes = [BearerTokenAuthentication]
 
     def get(self, request):
-        return Response(UserSerializer(request.user).data)
+        data = UserSerializer(request.user).data
+        data["has_paid_report"] = _has_paid_report(request.user)
+        if data["has_paid_report"]:
+            from core.services.report_jobs import kickoff_paid_report_for_user
+
+            kickoff_paid_report_for_user(request.user, retry_failed=False)
+        return Response(data)
 
 
 class YandexAuthStartView(APIView):
     permission_classes = [permissions.AllowAny]
-    authentication_classes = [BearerTokenAuthentication]
+    authentication_classes: list = []
 
     def get(self, request):
         token = (request.query_params.get("session_token") or "").strip()
-        if not token:
-            return Response({"detail": "session_token обязателен."}, status=status.HTTP_400_BAD_REQUEST)
-        session = get_object_or_404(OnboardingSession, token=token)
+        if token:
+            session = get_object_or_404(OnboardingSession, token=token)
+        else:
+            session = OnboardingSession.objects.create()
         requested = (request.query_params.get("redirect_uri") or "").strip()
         try:
             uri = resolve_redirect_uri(requested)
@@ -134,6 +149,75 @@ class YandexAuthStartView(APIView):
         except YandexOAuthError as exc:
             return Response({"detail": exc.detail}, status=exc.status)
         return Response({"url": url, "redirect_uri": uri})
+
+
+class AuthLogoutView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
+
+    def post(self, request):
+        token = getattr(request, "auth", None)
+        if isinstance(token, AuthToken):
+            token.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class MeDevResetView(APIView):
+    """Только DEBUG: стереть заказы пользователя, чтобы пройти оплату заново."""
+
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
+
+    def post(self, request):
+        if not settings.DEBUG:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        deleted, _ = _orders_for_user(request.user).delete()
+        return Response({"ok": True, "deleted": deleted})
+
+
+class AuthDevLoginView(APIView):
+    """Только DEBUG: вход без Яндекса, чтобы пройти квиз и кабинет на localhost."""
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes: list = []
+
+    def post(self, request):
+        if not settings.DEBUG:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        raw = request.data if isinstance(request.data, dict) else {}
+        persona = str(raw.get("persona") or "empty").strip().lower()
+        if persona not in {"empty", "report", "insight"}:
+            return Response(
+                {"detail": "persona: empty, report или insight."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user = get_or_create_dev_user()
+        _orders_for_user(user).delete()
+        session_token = ""
+        if persona == "report":
+            from core.services.dev_fixtures import seed_dev_paid_report
+
+            order = seed_dev_paid_report(user)
+            session_token = str(order.session.token)
+        elif persona == "insight":
+            from core.services.dev_fixtures import seed_dev_insight_funnel
+
+            session = seed_dev_insight_funnel(user)
+            session_token = str(session.token)
+        auth_token = issue_auth_token(user)
+        user_data = UserSerializer(user).data
+        user_data["has_paid_report"] = _has_paid_report(user)
+        if user_data["has_paid_report"]:
+            from core.services.report_jobs import kickoff_paid_report_for_user
+
+            kickoff_paid_report_for_user(user, retry_failed=True)
+        return Response(
+            {
+                "token": auth_token.key,
+                "session_token": session_token,
+                "user": user_data,
+            }
+        )
 
 
 class YandexAuthCallbackView(APIView):
@@ -153,9 +237,17 @@ class YandexAuthCallbackView(APIView):
             _user, auth_token = complete_yandex_login(session=session, profile=profile)
         except YandexOAuthError:
             return redirect(f"{frontend}/onboarding/contacts/?error=oauth")
+        if _has_paid_report(_user):
+            from core.services.report_jobs import kickoff_paid_report_for_user
+
+            kickoff_paid_report_for_user(_user, retry_failed=True)
+        dest = (
+            f"{frontend}/account/"
+            if _has_paid_report(_user)
+            else f"{frontend}/onboarding/insight/"
+        )
         return redirect(
-            f"{frontend}/onboarding/insight/"
-            f"#auth={quote(auth_token.key)}&session_token={quote(str(session.token))}"
+            f"{dest}#auth={quote(auth_token.key)}&session_token={quote(str(session.token))}"
         )
 
     def post(self, request):
@@ -167,11 +259,17 @@ class YandexAuthCallbackView(APIView):
             user, auth_token = complete_yandex_login(session=session, profile=profile)
         except YandexOAuthError as exc:
             return Response({"detail": exc.detail}, status=exc.status)
+        user_data = UserSerializer(user).data
+        user_data["has_paid_report"] = _has_paid_report(user)
+        if user_data["has_paid_report"]:
+            from core.services.report_jobs import kickoff_paid_report_for_user
+
+            kickoff_paid_report_for_user(user, retry_failed=True)
         return Response(
             {
                 "token": auth_token.key,
                 "session_token": str(session.token),
-                "user": UserSerializer(user).data,
+                "user": user_data,
             }
         )
 
@@ -544,7 +642,98 @@ class MeReportView(APIView):
             order = refresh_payment_link_if_stale(order)
         except OrderError:
             pass
+        if order.status == Order.Status.PAID:
+            from core.services.report_jobs import kickoff_paid_report_for_order
+
+            kickoff_paid_report_for_order(order, retry_failed=False)
         return Response(OrderSerializer(order).data)
+
+
+class MeReportNatalGenerateView(APIView):
+    """Собрать вкладку «Твоя карта» скиллом paid_report_natal (Polza)."""
+
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
+
+    def post(self, request):
+        order = _latest_order_for(request.user)
+        if order is None:
+            return Response({"detail": "Нет заказа."}, status=status.HTTP_404_NOT_FOUND)
+        if order.status != Order.Status.PAID:
+            return Response(
+                {"detail": "Разбор карты будет после оплаты."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        force = str(request.data.get("force") or "").lower() in {"1", "true", "yes"}
+        from core.services.report import generate_natal_section
+
+        report = generate_natal_section(order, force=force)
+        natal = ((report.get("document") or {}).get("interpretive") or {}).get("natal") or {}
+        return Response(
+            {
+                "status": natal.get("source") or "fallback",
+                "natal": natal,
+                "report": report,
+            }
+        )
+
+
+class MeReportAspectsGenerateView(APIView):
+    """Собрать вкладку «Аспекты» скиллом paid_report_aspects (Polza)."""
+
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
+
+    def post(self, request):
+        order = _latest_order_for(request.user)
+        if order is None:
+            return Response({"detail": "Нет заказа."}, status=status.HTTP_404_NOT_FOUND)
+        if order.status != Order.Status.PAID:
+            return Response(
+                {"detail": "Разбор карты будет после оплаты."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        force = str(request.data.get("force") or "").lower() in {"1", "true", "yes"}
+        from core.services.report import generate_aspects_section
+
+        report = generate_aspects_section(order, force=force)
+        aspects = ((report.get("document") or {}).get("interpretive") or {}).get("aspects") or {}
+        return Response(
+            {
+                "status": aspects.get("source") or "fallback",
+                "aspects": aspects,
+                "report": report,
+            }
+        )
+
+
+class MeReportCyclesGenerateView(APIView):
+    """Собрать вкладку «Циклы» скиллом paid_report_cycles (Polza)."""
+
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
+
+    def post(self, request):
+        order = _latest_order_for(request.user)
+        if order is None:
+            return Response({"detail": "Нет заказа."}, status=status.HTTP_404_NOT_FOUND)
+        if order.status != Order.Status.PAID:
+            return Response(
+                {"detail": "Разбор карты будет после оплаты."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        force = str(request.data.get("force") or "").lower() in {"1", "true", "yes"}
+        from core.services.report import generate_cycles_section
+
+        report = generate_cycles_section(order, force=force)
+        cycles = ((report.get("document") or {}).get("interpretive") or {}).get("cycles") or {}
+        return Response(
+            {
+                "status": cycles.get("source") or "fallback",
+                "cycles": cycles,
+                "report": report,
+            }
+        )
 
 
 class OrderReportPdfView(APIView):

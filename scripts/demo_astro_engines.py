@@ -36,7 +36,9 @@ BIRTH = dict(
 
 
 def _fmt_planet(p: dict) -> str:
-    bits = [f"{p['sign_ru']} {p['degree']:.2f}°"]
+    degree = int(p.get("degree") or 0)
+    minute = int(p.get("minute") or 0)
+    bits = [f"{p['sign_ru']} {degree}°{minute:02d}′"]
     if p.get("house"):
         bits.append(f"дом {p['house']}")
     if p.get("retrograde"):

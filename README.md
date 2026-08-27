@@ -70,8 +70,11 @@ Payload шага `birth`:
 - `birth_place` обязателен (или lat/lng).
 - Без `birth_time` — Солнце/Луна/планеты считаются, Asc/дома не отдаём.
 - Инсайт: готовые тексты в духе The Pattern, не LLM.
-  С `POLZA_API_KEY` (модель `openai/gpt-5.6-terra-pro` через [Polza.ai](https://polza.ai/docs))
+  С `POLZA_API_KEY` (по умолчанию `openai/gpt-5.6-luna-pro` через [Polza.ai](https://polza.ai/docs))
   или `GROQ_API_KEY` тексты + оффер персонализируются и кэшируются в `NatalChart.chart_data`.
+  Модель задаётся на системный промпт: frontmatter `model:` в `core/prompts/*.md`
+  или `LLM_MODEL_*`. Terra — онбординг / editorial / композитор отчёта.
+  Luna — длинные вкладки natal / aspects / cycles.
   Без ключа — шаблоны + дефолтный оффер из фокуса квиза.
 ## Domain
 

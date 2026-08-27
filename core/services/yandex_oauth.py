@@ -278,7 +278,34 @@ def exchange_code(*, code: str, state: str) -> tuple[OnboardingSession, YandexPr
 
 
 def issue_auth_token(user: User) -> AuthToken:
-    return AuthToken.objects.create(key=secrets.token_hex(32), user=user)
+    days = max(1, int(getattr(settings, "AUTH_TOKEN_TTL_DAYS", 7) or 7))
+    AuthToken.objects.filter(user=user).delete()
+    return AuthToken.objects.create(
+        key=secrets.token_hex(32),
+        user=user,
+        expires_at=timezone.now() + timedelta(days=days),
+    )
+
+
+DEV_YANDEX_ID = "local-dev"
+
+
+def get_or_create_dev_user() -> User:
+    existing = Profile.objects.select_related("user").filter(yandex_id=DEV_YANDEX_ID).first()
+    if existing:
+        return existing.user
+    user = User.objects.create_user(
+        username="yandex_local_dev",
+        email="dev@localhost",
+        first_name="Виктория",
+    )
+    user.set_unusable_password()
+    user.save()
+    account, _ = Profile.objects.get_or_create(user=user)
+    account.yandex_id = DEV_YANDEX_ID
+    account.display_name = "Виктория"
+    account.save(update_fields=["yandex_id", "display_name"])
+    return user
 
 
 def _unique_username(yandex_id: str) -> str:
