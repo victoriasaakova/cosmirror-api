@@ -41,6 +41,11 @@ urlpatterns = [
         views.MeReportDemoCompleteView.as_view(),
         name="me-report-demo-complete",
     ),
+    path(
+        "me/report/confirm-payment/",
+        views.MeReportConfirmPaymentView.as_view(),
+        name="me-report-confirm-payment",
+    ),
     path("waitlist/", views.WaitlistCreateView.as_view(), name="waitlist"),
     path("journal/", views.JournalEntryListCreateView.as_view(), name="journal"),
     # Онбординг

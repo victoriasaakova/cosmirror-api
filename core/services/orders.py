@@ -23,6 +23,7 @@ from core.services.prodamus import (
     is_configured,
     notification_url,
     our_order_id,
+    parse_checkout_return,
     payment_status_of,
     prodamus_order_id,
 )
@@ -399,6 +400,74 @@ def complete_local_demo_order(order: Order) -> Order:
     return order
 
 
+def _deliver_if_just_paid(order: Order, *, just_paid: bool) -> Order:
+    if not just_paid:
+        return order
+    from core.services.fulfillment import FulfillmentError, deliver_paid_order
+
+    try:
+        deliver_paid_order(order)
+    except FulfillmentError:
+        logger.exception("Paid report delivery failed for %s", order.public_id)
+    return order
+
+
+def confirm_checkout_return(order: Order, payload: dict) -> Order:
+    """
+    Возврат с urlSuccess: СБП часто редиректит success на минуты раньше webhook.
+    Доверяем только своему заказу владельца + numeric payform_id + status=success.
+    Настоящий webhook позже остаётся идемпотентным.
+    """
+    params = parse_checkout_return(payload)
+    order_ref = params["order_ref"]
+    if order_ref and order_ref != str(order.public_id):
+        raise OrderError("Возврат оплаты относится к другому заказу.", 409)
+    if params["status"] != "success":
+        return order
+    if not params["payform_id"].isdigit():
+        return order
+    if not order_ref:
+        return order
+
+    just_paid = False
+    with transaction.atomic():
+        order = Order.objects.select_for_update().get(pk=order.pk)
+        if order.status in _TERMINAL:
+            return order
+        if order.status != Order.Status.PAID:
+            order.status = Order.Status.PAID
+            order.paid_at = order.paid_at or timezone.now()
+            order.last_error = ""
+            just_paid = True
+        if params["payform_id"] and not order.prodamus_order_id:
+            order.prodamus_order_id = params["payform_id"]
+        stored = order.webhook_payload if isinstance(order.webhook_payload, dict) else {}
+        if not stored:
+            order.webhook_payload = {
+                "source": "checkout_return",
+                "payment_status": "success",
+                "order_id": params["payform_id"],
+                "order_num": str(order.public_id),
+            }
+        order.save(
+            update_fields=[
+                "status",
+                "paid_at",
+                "last_error",
+                "prodamus_order_id",
+                "webhook_payload",
+                "updated_at",
+            ]
+        )
+    if just_paid:
+        logger.info(
+            "Checkout return marked paid for %s payform_id=%s",
+            order.public_id,
+            params["payform_id"],
+        )
+    return _deliver_if_just_paid(order, just_paid=just_paid)
+
+
 def apply_prodamus_webhook(payload: dict) -> Order | None:
     """
     Идемпотентная обработка webhook: повтор success не меняет оплаченный заказ.
@@ -455,11 +524,4 @@ def apply_prodamus_webhook(payload: dict) -> Order | None:
                 "updated_at",
             ]
         )
-    if just_paid:
-        from core.services.fulfillment import FulfillmentError, deliver_paid_order
-
-        try:
-            deliver_paid_order(order)
-        except FulfillmentError:
-            logger.exception("Demo report delivery failed for %s", order.public_id)
-    return order
+    return _deliver_if_just_paid(order, just_paid=just_paid)

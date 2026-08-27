@@ -398,6 +398,43 @@ def payment_status_of(payload: dict) -> str:
     return str(status or "").strip().lower()
 
 
+def parse_checkout_return(data: Any) -> dict[str, str]:
+    """
+    Параметры, которые Prodamus дописывает к urlSuccess.
+    Без подписи: это только возврат браузера, не webhook.
+    """
+    if not isinstance(data, dict):
+        data = {}
+
+    def pick(*names: str) -> str:
+        for name in names:
+            value = data.get(name)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return ""
+
+    status = pick(
+        "payform_status",
+        "_payform_status",
+        "payment_status",
+    ).lower()
+    payform_id = pick("payform_id", "_payform_id")
+    order_ref = pick("payform_order_id", "_payform_order_id")
+    maybe_order = pick("order_id", "order")
+    if not order_ref and _looks_like_uuid(maybe_order):
+        order_ref = maybe_order
+    if not payform_id and maybe_order.isdigit():
+        payform_id = maybe_order
+    return {
+        "status": status,
+        "payform_id": payform_id,
+        "order_ref": order_ref,
+    }
+
+
 def our_order_id(payload: dict) -> str:
     """order_id, который мы отправили, в вебхуке приходит как order_num."""
     for source in (payload, payload.get("submit") if isinstance(payload.get("submit"), dict) else {}):

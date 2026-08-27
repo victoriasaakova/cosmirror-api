@@ -23,6 +23,7 @@ from core.services.prodamus import (
     create_payment_link,
     dump_for_signature,
     flatten_php,
+    parse_checkout_return,
     sign,
     signed_checkout_url,
     verify,
@@ -486,6 +487,135 @@ class ProdamusWebhookTests(TestCase):
         self.assertEqual(response.json()["id"], str(self.order.public_id))
         self.assertIsNone(response.json()["report"])
         self.assertNotIn("customer_email", response.json())
+
+
+@override_settings(
+    PRODAMUS_FORM_URL="https://demo.payform.ru/",
+    PRODAMUS_SECRET_KEY="test-secret",
+    PRODAMUS_DEMO_MODE=False,
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    RESEND_API_KEY="",
+)
+class CheckoutReturnConfirmTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user, self.auth_key = _make_user(email="return@example.com", yandex_id="5105")
+        lead = WaitlistLead.objects.create(email="return@example.com")
+        session = OnboardingSession.objects.create(waitlist_lead=lead, user=self.user)
+        self.order = Order.objects.create(
+            idempotency_key="return-key-0001",
+            idempotency_request_hash="c" * 64,
+            session=session,
+            waitlist_lead=lead,
+            user=self.user,
+            customer_email="return@example.com",
+            product_sku="personal_report",
+            product_name="Персональный разбор Cosmirror",
+            amount=Decimal("777.00"),
+            status=Order.Status.AWAITING_PAYMENT,
+        )
+
+    def _auth(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.auth_key}"}
+
+    def test_parse_underscore_payform_keys(self):
+        parsed = parse_checkout_return(
+            {
+                "_payform_status": "success",
+                "_payform_id": "48103246",
+                "_payform_order_id": str(self.order.public_id),
+            }
+        )
+        self.assertEqual(parsed["status"], "success")
+        self.assertEqual(parsed["payform_id"], "48103246")
+        self.assertEqual(parsed["order_ref"], str(self.order.public_id))
+
+    @patch("core.services.fulfillment.deliver_paid_order")
+    def test_success_return_marks_paid(self, mocked_deliver):
+        response = self.client.post(
+            "/api/me/report/confirm-payment/",
+            {
+                "_payform_status": "success",
+                "_payform_id": "48103246",
+                "_payform_order_id": str(self.order.public_id),
+            },
+            format="json",
+            **self._auth(),
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["status"], "paid")
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.PAID)
+        self.assertEqual(self.order.prodamus_order_id, "48103246")
+        mocked_deliver.assert_called_once()
+
+        again = self.client.post(
+            "/api/me/report/confirm-payment/",
+            {
+                "payform_status": "success",
+                "payform_id": "48103246",
+                "payform_order_id": str(self.order.public_id),
+            },
+            format="json",
+            **self._auth(),
+        )
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(again.json()["status"], "paid")
+        mocked_deliver.assert_called_once()
+
+    def test_from_prodamus_without_success_does_not_mark_paid(self):
+        response = self.client.post(
+            "/api/me/report/confirm-payment/",
+            {"from": "prodamus"},
+            format="json",
+            **self._auth(),
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["status"], "awaiting_payment")
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.AWAITING_PAYMENT)
+
+    def test_success_without_payform_id_does_not_mark_paid(self):
+        response = self.client.post(
+            "/api/me/report/confirm-payment/",
+            {
+                "_payform_status": "success",
+                "_payform_order_id": str(self.order.public_id),
+            },
+            format="json",
+            **self._auth(),
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.AWAITING_PAYMENT)
+
+    def test_wrong_order_is_rejected(self):
+        other = "00000000-0000-0000-0000-000000000099"
+        response = self.client.post(
+            "/api/me/report/confirm-payment/",
+            {
+                "_payform_status": "success",
+                "_payform_id": "48103246",
+                "_payform_order_id": other,
+            },
+            format="json",
+            **self._auth(),
+        )
+        self.assertEqual(response.status_code, 404)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.AWAITING_PAYMENT)
+
+    def test_requires_auth(self):
+        response = self.client.post(
+            "/api/me/report/confirm-payment/",
+            {
+                "_payform_status": "success",
+                "_payform_id": "48103246",
+                "_payform_order_id": str(self.order.public_id),
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 401)
 
 
 @override_settings(
@@ -2481,6 +2611,7 @@ class YandexAuthTests(TestCase):
         me = self.client.get("/api/me/", HTTP_AUTHORIZATION=f"Bearer {data['token']}")
         self.assertEqual(me.status_code, 200)
         self.assertEqual(me.json()["email"], "ivan@yandex.ru")
+        self.assertEqual(me.json()["profile"]["display_name"], "Иван")
         self.assertFalse(me.json()["has_paid_report"])
         report = self.client.get(
             "/api/me/report/",

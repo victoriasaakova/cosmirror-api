@@ -1,4 +1,5 @@
 import logging
+import uuid
 from typing import Optional
 from urllib.parse import quote
 
@@ -44,6 +45,7 @@ from .services.orders import (
     OrderError,
     apply_prodamus_webhook,
     complete_local_demo_order,
+    confirm_checkout_return,
     create_or_resume_order,
     refresh_payment_link_if_stale,
     validate_idempotency_key,
@@ -53,7 +55,13 @@ from .services.personalize import (
     schedule_session_personalization,
     should_schedule_personalization,
 )
-from .services.prodamus import extract_sign, is_configured, parse_webhook_payload, verify_webhook
+from .services.prodamus import (
+    extract_sign,
+    is_configured,
+    parse_checkout_return,
+    parse_webhook_payload,
+    verify_webhook,
+)
 from .services.yandex_oauth import (
     YandexOAuthError,
     build_authorize_url,
@@ -818,6 +826,47 @@ class OrderDemoCompleteView(APIView):
 class MeReportDemoCompleteView(OrderDemoCompleteView):
     def post(self, request, public_id=None):
         return super().post(request, public_id=None)
+
+
+class MeReportConfirmPaymentView(APIView):
+    """
+    Возврат с Prodamus urlSuccess. СБП может прислать webhook на 15+ минут позже
+    редиректа, страница кабинета не должна крутиться всё это время.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
+
+    def post(self, request):
+        payload = {}
+        if isinstance(request.data, dict):
+            payload.update(request.data)
+        payload.update(request.query_params.dict())
+        params = parse_checkout_return(payload)
+        if params["order_ref"]:
+            try:
+                public_id = uuid.UUID(params["order_ref"])
+            except (ValueError, TypeError):
+                return Response(
+                    {"detail": "Некорректный номер заказа."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            order = _orders_for_user(request.user).filter(public_id=public_id).first()
+            if order is None:
+                return Response({"detail": "Нет заказа."}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            order = _latest_order_for(request.user)
+            if order is None:
+                return Response({"detail": "Нет заказа."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            order = confirm_checkout_return(order, payload)
+        except OrderError as exc:
+            return Response({"detail": exc.detail}, status=exc.status)
+        if order.status == Order.Status.PAID:
+            from core.services.report_jobs import kickoff_paid_report_for_order
+
+            kickoff_paid_report_for_order(order, retry_failed=False)
+        return Response(OrderSerializer(order).data)
 
 
 class ProdamusWebhookView(APIView):
