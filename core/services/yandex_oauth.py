@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
+from core.services.person_name import sanitize_person_name
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import transaction
@@ -244,15 +245,13 @@ def looks_like_account_handle(value: str, *, login: str = "", email: str = "") -
 
 
 def _human_given_name(*, first_name: str, real_name: str, display_name: str, login: str, email: str) -> str:
-    first = (first_name or "").strip()
+    first = sanitize_person_name(first_name)
     if first and not looks_like_account_handle(first, login=login, email=email):
         return first
-    real = (real_name or "").strip()
-    if real:
-        token = real.split()[0].strip()
-        if token and not looks_like_account_handle(token, login=login, email=email):
-            return token
-    shown = (display_name or "").strip()
+    real = sanitize_person_name((real_name or "").split()[0] if real_name else "")
+    if real and not looks_like_account_handle(real, login=login, email=email):
+        return real
+    shown = sanitize_person_name(display_name)
     if shown and not looks_like_account_handle(shown, login=login, email=email):
         return shown
     return ""
@@ -268,7 +267,7 @@ def quiz_name_from_session(session: OnboardingSession | None) -> str:
     )
     if answer is None or not isinstance(answer.payload, dict):
         return ""
-    return str(answer.payload.get("name") or "").strip()
+    return sanitize_person_name(str(answer.payload.get("name") or ""))
 
 
 def quiz_name_from_user(user: User) -> str:
@@ -279,7 +278,7 @@ def quiz_name_from_user(user: User) -> str:
     )
     if answer is None or not isinstance(answer.payload, dict):
         return ""
-    return str(answer.payload.get("name") or "").strip()
+    return sanitize_person_name(str(answer.payload.get("name") or ""))
 
 
 def resolved_display_name(user: User) -> str:
@@ -527,7 +526,7 @@ def _upsert_waitlist_from_yandex(
     payload = {
         **existing_payload,
         "email": email,
-        "name": name or existing_payload.get("name") or "",
+        "name": sanitize_person_name(name or existing_payload.get("name") or ""),
         "source": existing_payload.get("source") or "yandex_id",
         "pd_consent": True,
         "pd_consent_at": existing_payload.get("pd_consent_at") or timezone.now().isoformat(),

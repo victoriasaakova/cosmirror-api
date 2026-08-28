@@ -1,4 +1,5 @@
 from django.contrib.auth.models import User
+from core.services.person_name import sanitize_person_name
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
@@ -194,8 +195,10 @@ class OnboardingStepSubmitSerializer(serializers.Serializer):
     completed = serializers.BooleanField(default=True)
 
     def save_answer(self, session: OnboardingSession, step: OnboardingStep) -> OnboardingStepAnswer:
-        payload = self.validated_data.get("payload") or {}
+        payload = dict(self.validated_data.get("payload") or {})
         completed = self.validated_data.get("completed", True)
+        if "name" in payload:
+            payload["name"] = sanitize_person_name(str(payload.get("name") or ""))
 
         if step.step_type == OnboardingStep.StepType.BIRTH_DATA:
             if not payload.get("birth_date"):
@@ -325,7 +328,7 @@ class OnboardingStepSubmitSerializer(serializers.Serializer):
         defaults = {
             "phone": phone,
             "telegram": telegram,
-            "name": (payload.get("name") or "").strip(),
+            "name": sanitize_person_name(payload.get("name")),
             "source": (payload.get("source") or "onboarding").strip() or "onboarding",
             "message": (payload.get("message") or "").strip(),
         }

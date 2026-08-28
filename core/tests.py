@@ -459,6 +459,32 @@ class ProdamusWebhookTests(TestCase):
         self.assertFalse(deliver_paid_order(self.order))
         self.assertEqual(len(mail.outbox), 1)
 
+    @override_settings(
+        LLM_PROVIDER="auto",
+        POLZA_API_KEY="test-key",
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+        RESEND_API_KEY="",
+    )
+    @patch("core.services.report_jobs._running_tests", return_value=False)
+    @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
+    @patch("core.services.report_jobs.schedule_paid_report_generation")
+    def test_deliver_defers_email_until_llm_job(self, schedule, _configured, _tests):
+        from django.core import mail
+        from core.services.fulfillment import deliver_paid_order, email_paid_report
+
+        self.order.status = Order.Status.PAID
+        self.order.save(update_fields=["status"])
+        self.assertFalse(deliver_paid_order(self.order))
+        self.assertEqual(len(mail.outbox), 0)
+        self.order.refresh_from_db()
+        self.assertIsNone(self.order.fulfilled_at)
+        schedule.assert_called_once()
+
+        self.assertTrue(email_paid_report(self.order))
+        self.assertEqual(len(mail.outbox), 1)
+        self.order.refresh_from_db()
+        self.assertIsNotNone(self.order.fulfilled_at)
+
     def test_bad_signature_rejected(self):
         response = self.client.post(
             "/api/payments/prodamus/webhook/",
@@ -1196,6 +1222,7 @@ class PaidReportTests(TestCase):
         self.order.refresh_from_db()
         store = self.order.interpretive
         self.assertEqual(store["generation"]["status"], "done")
+        self.assertNotIn("current_section", store["generation"])
         self.assertEqual(store["natal"]["source"], "llm")
         self.assertEqual(store["aspects"]["source"], "llm")
         self.assertEqual(store["cycles"]["source"], "llm")
@@ -1498,10 +1525,13 @@ class PaidReportLlmFirstOverlayTests(TestCase):
 
     @override_settings(LLM_PROVIDER="auto", POLZA_API_KEY="test-key")
     def test_no_persisted_llm_pending_uses_live_fallback(self):
-        self.order.interpretive = {"generation": {"status": "running"}}
+        self.order.interpretive = {
+            "generation": {"status": "running", "current_section": "aspects"},
+        }
         self.order.save(update_fields=["interpretive"])
         interpretive = self._report()["document"]["interpretive"]
         self.assertEqual(interpretive["generation"]["status"], "running")
+        self.assertEqual(interpretive["generation"]["current_section"], "aspects")
         for key in ("natal", "aspects", "cycles", "request", "practice"):
             self.assertEqual(interpretive[key]["source"], "fallback", key)
         self.assertTrue(interpretive["natal"]["payload"]["core_portrait"]["headline"])

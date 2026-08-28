@@ -31,8 +31,10 @@ class FulfillmentError(Exception):
 
 def deliver_paid_order(order: Order, *, force: bool = False, allow_unpaid_demo: bool = False) -> bool:
     """
-    Собрать PDF и отправить письмо. Отчёт на сайте не зависит от почты:
-    если адрес пустой или письмо не ушло, заказ всё равно оплачен.
+    Собрать PDF и отправить письмо. Если LLM ещё не готов, kickoff
+    стартует job, а письмо уходит после него — чтобы PDF был с текстами модели.
+    Отчёт на сайте не зависит от почты: если адрес пустой или письмо не ушло,
+    заказ всё равно оплачен.
     """
     unpaid_ok = allow_unpaid_demo and bool(getattr(settings, "PRODAMUS_DEMO_MODE", False))
     if order.status != Order.Status.PAID and not force and not unpaid_ok:
@@ -40,9 +42,25 @@ def deliver_paid_order(order: Order, *, force: bool = False, allow_unpaid_demo: 
     if order.fulfilled_at and not force:
         return False
 
-    from core.services.report_jobs import kickoff_paid_report_for_order
+    from core.services.report_jobs import (
+        kickoff_paid_report_for_order,
+        should_defer_fulfillment_email,
+    )
 
     kickoff_paid_report_for_order(order, retry_failed=True)
+    if not force and should_defer_fulfillment_email(order):
+        return False
+
+    return email_paid_report(order, force=force, allow_unpaid_demo=allow_unpaid_demo)
+
+
+def email_paid_report(order: Order, *, force: bool = False, allow_unpaid_demo: bool = False) -> bool:
+    """Собрать текущий отчёт в PDF и отправить письмо. Без kickoff LLM."""
+    unpaid_ok = allow_unpaid_demo and bool(getattr(settings, "PRODAMUS_DEMO_MODE", False))
+    if order.status != Order.Status.PAID and not force and not unpaid_ok:
+        raise FulfillmentError("Заказ ещё не оплачен.")
+    if order.fulfilled_at and not force:
+        return False
 
     report = build_paid_report(order)
     pdf = render_report_pdf(report)

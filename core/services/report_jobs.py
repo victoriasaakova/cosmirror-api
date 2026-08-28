@@ -1,8 +1,10 @@
 """
-Фоновая генерация LLM-слоёв платного отчёта.
+Генерация LLM-слоёв платного отчёта.
 
-Логин и оплата стартуют job. GET только читает кэш. Браузер не дергает
-generate-эндпоинты: иначе 401, гонки сохранения и пять вызовов Polza подряд.
+Оплата и логин стартуют job. Кабинет не открывает отчёт, пока job не
+закончится: пользователь ждёт прелоадер, затем видит LLM-текст.
+GET только читает кэш. Браузер не дергает generate-эндпоинты: иначе 401,
+гонки сохранения и пять вызовов Polza подряд.
 """
 
 from __future__ import annotations
@@ -73,6 +75,15 @@ def should_start_generation(order: Order, *, retry_failed: bool = False) -> bool
     return True
 
 
+def should_defer_fulfillment_email(order: Order) -> bool:
+    """Письмо и PDF уходят после LLM-job, чтобы вложение было с текстами модели."""
+    if _running_tests():
+        return False
+    if not llm_client.is_configured():
+        return False
+    return layers_need_llm(order)
+
+
 def save_interpretive_layer(
     order: Order,
     key: str,
@@ -117,7 +128,12 @@ def _write_interpretive(
     order.interpretive = fresh.interpretive
 
 
-def mark_generation_status(order: Order, status: str) -> None:
+def mark_generation_status(
+    order: Order,
+    status: str,
+    *,
+    current_section: Optional[str] = None,
+) -> None:
     now = datetime.now(timezone.utc).isoformat()
     with _save_guard:
         fresh = Order.objects.filter(pk=order.pk).first()
@@ -127,11 +143,16 @@ def mark_generation_status(order: Order, status: str) -> None:
         job = dict(store.get("generation") or {}) if isinstance(store.get("generation"), dict) else {}
         job["status"] = status
         if status == "running":
-            job["started_at"] = now
+            job.setdefault("started_at", now)
             job.pop("finished_at", None)
         elif status == "done":
             job["finished_at"] = now
             job.setdefault("started_at", now)
+            job.pop("current_section", None)
+        if current_section:
+            job["current_section"] = current_section
+        elif current_section == "":
+            job.pop("current_section", None)
         store["generation"] = job
         fresh.interpretive = store
         try:
@@ -187,6 +208,7 @@ def schedule_paid_report_generation(order_id: int, *, retry_failed: bool = False
         if order_id in _inflight_orders:
             return
         _inflight_orders.add(order_id)
+    mark_generation_status(order, "running", current_section="natal")
     thread = threading.Thread(
         target=_run_paid_report_generation,
         args=(order_id,),
@@ -251,9 +273,10 @@ def generate_missing_interpretive_layers(order: Order) -> None:
         ("practice", generate_practice_section),
     )
 
-    mark_generation_status(order, "running")
+    mark_generation_status(order, "running", current_section=steps[0][0])
     try:
         for section, generate in steps:
+            mark_generation_status(order, "running", current_section=section)
             try:
                 generate(order, force=False)
             except Exception as exc:
@@ -292,12 +315,21 @@ def _run_paid_report_generation(order_id: int) -> None:
         order = Order.objects.filter(pk=order_id).first()
         if order is None or order.status != Order.Status.PAID:
             return
-        generate_missing_interpretive_layers(order)
-    except Exception:
-        logger.exception("Background paid-report generation failed for order %s", order_id)
-        order = Order.objects.filter(pk=order_id).first()
-        if order is not None:
-            mark_generation_status(order, "done")
+        try:
+            generate_missing_interpretive_layers(order)
+        except Exception:
+            logger.exception("Background paid-report generation failed for order %s", order_id)
+            order = Order.objects.filter(pk=order_id).first()
+            if order is not None:
+                mark_generation_status(order, "done")
+        try:
+            from core.services.fulfillment import FulfillmentError, email_paid_report
+
+            order = Order.objects.filter(pk=order_id).first()
+            if order is not None and order.status == Order.Status.PAID:
+                email_paid_report(order)
+        except FulfillmentError:
+            logger.exception("Paid report email after LLM failed for order %s", order_id)
     finally:
         with _schedule_guard:
             _inflight_orders.discard(order_id)

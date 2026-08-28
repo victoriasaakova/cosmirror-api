@@ -125,7 +125,11 @@ def build_paid_report(order: Order) -> dict[str, Any]:
     job = (order.interpretive or {}).get("generation") if isinstance(order.interpretive, dict) else None
     if isinstance(job, dict):
         interpretive = document.setdefault("interpretive", {})
-        interpretive["generation"] = {"status": str(job.get("status") or "idle")}
+        generation_meta: dict[str, Any] = {"status": str(job.get("status") or "idle")}
+        current_section = str(job.get("current_section") or "").strip()
+        if current_section:
+            generation_meta["current_section"] = current_section
+        interpretive["generation"] = generation_meta
     sections = flatten_document_sections(document)
     owner = _person_block(order, natal)
 
