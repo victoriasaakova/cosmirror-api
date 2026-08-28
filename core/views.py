@@ -52,9 +52,12 @@ from .services.orders import (
 )
 from .services.personalize import (
     insight_is_ready,
+    quiz_from_session,
     schedule_session_personalization,
     should_schedule_personalization,
+    _has_funnel_structure,
 )
+from .services.onboarding_fallback import build_onboarding_fallback
 from .services.prodamus import (
     extract_sign,
     is_configured,
@@ -80,13 +83,30 @@ from .services.yandex_oauth import (
 )
 
 
+def _resolve_insight_funnel(
+    *,
+    session: OnboardingSession,
+    insight: dict,
+    natal: dict,
+) -> dict:
+    source = str((insight or {}).get("source") or "")
+    if source not in ("", "templates") and _has_funnel_structure(insight):
+        return insight
+    return build_onboarding_fallback(
+        insight=insight or {},
+        natal=natal or {},
+        quiz=quiz_from_session(session),
+    )
+
+
 def _kickoff_personalization(
     *,
     session: OnboardingSession,
     insight: dict,
+    natal: Optional[dict] = None,
     chart: Optional[NatalChart] = None,
 ) -> tuple[dict, bool]:
-    """Не блокируем HTTP на LLM: стартуем фон и отдаём то, что уже есть."""
+    """Не блокируем HTTP на LLM: стартуем фон и отдаём полный fallback funnel."""
     if chart is not None:
         chart.refresh_from_db()
         stored = (chart.chart_data or {}).get("insight") if isinstance(chart.chart_data, dict) else None
@@ -98,6 +118,7 @@ def _kickoff_personalization(
                 chart_id=chart.pk,
                 token=str(session.token),
             )
+    insight = _resolve_insight_funnel(session=session, insight=insight, natal=natal or {})
     return insight, insight_is_ready(insight)
 
 
@@ -564,6 +585,7 @@ class OnboardingInsightView(APIView):
             insight, ready = _kickoff_personalization(
                 session=session,
                 insight=insight,
+                natal=natal,
                 chart=chart,
             )
             return Response(
@@ -599,6 +621,7 @@ class OnboardingInsightView(APIView):
         insight, ready = _kickoff_personalization(
             session=session,
             insight=bundle["insight"],
+            natal=natal,
             chart=chart if chart and chart.status == NatalChart.Status.READY else None,
         )
         return Response(

@@ -13,6 +13,7 @@ import threading
 from typing import Any, Optional
 
 from core.services import editorial, llm_client
+from core.services.person_name import sanitize_person_name
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +188,9 @@ def is_personalized(insight: Optional[dict[str, Any]]) -> bool:
 
 
 def insight_is_ready(insight: Optional[dict[str, Any]]) -> bool:
-    """Можно отдавать на экран: персонализирован, шаблоны без LLM, или уже пробовали."""
+    """Можно отдавать на экран: полный funnel (fallback или LLM), не обязательно LLM."""
+    if _has_funnel_structure(insight):
+        return True
     if is_personalized(insight):
         return True
     if not llm_client.is_configured():
@@ -479,17 +482,11 @@ def _with_templates(
     quiz: dict[str, Any],
     natal: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    out = copy.deepcopy(insight) if insight else {}
-    out.setdefault("tone", "pattern_psych")
-    cycles = out.get("cycles") or []
-    influences = out.get("influences") or []
-    out["opening"] = default_opening(quiz, influences)
-    out["body"] = default_body(quiz, influences)
-    out["product_pitch"] = default_product_pitch(cycles, quiz, natal)
-    out["outcomes"] = default_outcomes(quiz)
-    out["offer"] = offer
-    out["funnel_version"] = 5
-    out["source"] = "templates"
+    from core.services.onboarding_fallback import build_onboarding_fallback
+
+    out = build_onboarding_fallback(insight=insight, natal=natal, quiz=quiz)
+    if offer:
+        out["offer"] = offer
     return out
 
 
@@ -754,6 +751,10 @@ def quiz_from_session(session) -> dict[str, Any]:
         for key, value in answer.payload.items():
             if value in (None, "", [], {}):
                 continue
+            if key == "name" and isinstance(value, str):
+                value = sanitize_person_name(value)
+                if not value:
+                    continue
             quiz[key] = value
     return quiz
 

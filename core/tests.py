@@ -1353,14 +1353,13 @@ class InsightPersonalizeTests(TestCase):
         self.assertTrue(insight_is_ready(insight))
 
     @override_settings(POLZA_API_KEY="test-key", GROQ_API_KEY="")
-    def test_templates_are_not_ready_until_attempt_finishes(self):
-        from core.services.personalize import insight_is_ready, is_personalized
+    def test_templates_are_ready_and_still_allow_llm_schedule(self):
+        from core.services.personalize import insight_is_ready, is_personalized, should_schedule_personalization
 
         insight = _funnel_insight(source="templates")
         self.assertFalse(is_personalized(insight))
-        self.assertFalse(insight_is_ready(insight))
-        insight["personalize_attempted"] = True
         self.assertTrue(insight_is_ready(insight))
+        self.assertTrue(should_schedule_personalization(insight))
 
     @override_settings(POLZA_API_KEY="test-key", GROQ_API_KEY="")
     @patch("core.services.personalize.editorial.edit_user_facing_texts")
@@ -3377,6 +3376,17 @@ def _fake_store_chart(chart):
     chart.calculated_at = dj_tz.now()
     chart.save()
     return chart
+
+
+class PersonNameTests(TestCase):
+    def test_strips_emoji_and_symbols(self):
+        from core.services.person_name import sanitize_person_name
+
+        self.assertEqual(sanitize_person_name("Вика🌸✨"), "Вика")
+        self.assertEqual(sanitize_person_name("Anna-Marie"), "Anna-Marie")
+        self.assertEqual(sanitize_person_name("O’Connor"), "O’Connor")
+        self.assertEqual(sanitize_person_name("@@@"), "")
+        self.assertEqual(sanitize_person_name("Вика 123 !!!"), "Вика")
 
 
 class AccountCabinetTests(TestCase):

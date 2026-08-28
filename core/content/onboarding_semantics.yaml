@@ -1,0 +1,276 @@
+version: "1.2"
+locale: ru
+
+contract:
+  raw_enums_are_adapter_only: true
+  preserve_all_selected_focuses: true
+  unknown_raw_value_policy: ignore_and_log
+  gender_affects_scoring: false
+  gender_realization_stage: after_variant_selection
+
+stable_vocabulary:
+  focuses:
+    - relationships
+    - work_path
+    - money
+    - wellbeing
+    - identity
+    - self_realization
+  desired_outcomes:
+    - unlock_potential
+    - future_direction
+    - reduce_uncertainty
+    - understand_relationships
+    - recognize_patterns
+    - understand_life_stage
+    - open_exploration
+  life_context:
+    - stable
+    - localized_change
+    - multi_area_change
+    - ready_for_change
+    - unclear_context
+  triggers:
+    - self_understanding
+    - interpersonal_trigger
+    - decision
+    - need_for_validation
+    - curiosity
+  gender:
+    - female
+    - male
+    - unknown
+  astrology_literacy:
+    - sun_only
+    - big_three
+    - natal_chart
+    - transits
+
+adapters:
+  current_onboarding_v1:
+    fields:
+      focus:
+        raw_to_semantic:
+          love:
+            - relationships
+          money:
+            - work_path
+            - money
+          energy:
+            - wellbeing
+          confidence:
+            - identity
+          path:
+            - self_realization
+            - work_path
+      intent:
+        raw_to_semantic:
+          potential:
+            - unlock_potential
+          future:
+            - future_direction
+          uncertainty:
+            - reduce_uncertainty
+          relationships:
+            - understand_relationships
+          patterns:
+            - recognize_patterns
+          life-stage:
+            - understand_life_stage
+          other:
+            - open_exploration
+      life_stage:
+        raw_to_semantic:
+          stable:
+            - stable
+          one-sphere:
+            - localized_change
+          many-spheres:
+            - multi_area_change
+          ready-to-change:
+            - ready_for_change
+          unclear:
+            - unclear_context
+      astrology_trigger:
+        raw_to_semantic:
+          understand-self:
+            - self_understanding
+          person:
+            - interpersonal_trigger
+          decision:
+            - decision
+          check-feelings:
+            - need_for_validation
+          curious:
+            - curiosity
+      gender:
+        raw_to_semantic:
+          female: female
+          male: male
+        missing_or_unknown: unknown
+      chart_knowledge:
+        raw_to_semantic:
+          sun-only:
+            - sun_only
+          big-three:
+            - big_three
+          natal-chart:
+            - natal_chart
+          transits:
+            - transits
+        selection_role_v1: metadata_only
+
+selection_v1:
+  non_selecting_tags:
+    triggers:
+      - curiosity
+  note: >-
+    Curiosity is retained as semantic context and analytics data but contributes
+    zero score to specific variants in V1.
+  variant_scoring:
+    defaults_participate: false
+    require_positive_score_for_specific: true
+    weights:
+      focuses: 30
+      desired_outcomes: 20
+      life_context: 15
+      triggers: 15
+    tie_break:
+      - higher_variant_priority
+      - lexical_variant_id
+    no_positive_match: default
+  theme_scoring:
+    quiz_can_create_theme_without_evidence: false
+    influence_position_multipliers:
+      0: 1.00
+      1: 0.65
+      2: 0.40
+    note: >-
+      Ranked influences already emitted by the engine are weighted by list
+      position. theme_score += theme_support × multiplier. Influences beyond
+      index 2 use multiplier 0.40 if present. Natal support, when mapped, is
+      added unweighted and is not positional. Two weaker agreeing signals may
+      outrank one primary hit (0.65 + 0.40 = 1.05).
+    tie_break:
+      - higher_weighted_sum
+      - higher_single_contribution
+      - earlier_influence_position
+      - higher_theme_priority
+      - lexical_theme_id
+    no_supported_theme: global_fallback
+
+signal_mappings:
+  input_contract: influence.key
+  key_pattern: "^(jupiter|saturn|uranus|neptune|pluto)_on_(sun|moon|ascendant|midheaven|venus|mars)$"
+  unknown_key_policy: ignore_and_log
+  resolution:
+    order:
+      - exact_rules
+      - family_rules
+    exact_rule_stops_family_match: true
+    aggregate_multiple_influences: weighted_sum_by_influence_position
+  exact_rules:
+    saturn_on_moon:
+      theme_support:
+        responsibility_vs_capacity: 100
+        boundaries_vs_care: 90
+      evidence_basis: OUTER_COPY.saturn.moon
+  family_rules:
+    - id: jupiter_on_supported_target
+      match:
+        planet: jupiter
+        natal_targets:
+          - sun
+          - moon
+          - ascendant
+          - midheaven
+          - venus
+          - mars
+      theme_support:
+        direction_vs_inertia: 100
+      evidence_basis: OUTER_COPY.jupiter
+    - id: uranus_on_supported_target
+      match:
+        planet: uranus
+        natal_targets:
+          - sun
+          - moon
+          - ascendant
+          - midheaven
+          - venus
+          - mars
+      theme_support:
+        stability_vs_change: 100
+        autonomy_vs_closeness: 80
+        belonging_vs_authenticity: 70
+      evidence_basis: OUTER_COPY.uranus
+    - id: neptune_on_supported_target
+      match:
+        planet: neptune
+        natal_targets:
+          - sun
+          - moon
+          - ascendant
+          - midheaven
+          - venus
+          - mars
+      theme_support:
+        clarity_vs_idealization: 100
+        boundaries_vs_care: 70
+      evidence_basis: OUTER_COPY.neptune
+    - id: pluto_on_supported_target
+      match:
+        planet: pluto
+        natal_targets:
+          - sun
+          - moon
+          - ascendant
+          - midheaven
+          - venus
+          - mars
+      theme_support:
+        stability_vs_change: 100
+        uncertainty_and_control: 75
+      evidence_basis: OUTER_COPY.pluto
+  note: >-
+    The engine contract emits {planet}_on_{target} for the listed planets and
+    targets. Jupiter, Uranus, Neptune, and Pluto use target-independent OUTER_COPY,
+    so reviewed family rules are safe. Saturn has target-specific copy; only the
+    confirmed saturn_on_moon rule is enabled. Add Saturn Sun/default rules only
+    after reviewing their exact canonical copy.
+
+natal_support_mappings:
+  input_contract: base.key
+  unknown_key_policy: ignore_and_log
+  birth_time_rule: >-
+    Ascendant support is eligible only when the current calculation contract marks
+    birth time as reliable.
+  known_source_keys:
+    natal_sun:
+      theme_support: []
+      status: scaffold_only
+    natal_moon:
+      theme_support: []
+      status: scaffold_only
+    natal_asc:
+      theme_support: []
+      status: scaffold_only
+    no_birth_time:
+      theme_support: []
+      status: never_supports_theme
+  note: >-
+    These are the exact current base.key values. No reviewed sign-to-theme mapping
+    exists yet, so natal support remains non-selecting. Do not parse titles or prose
+    to manufacture support.
+
+gender_realization:
+  default_realization: base
+  merge_mode: sparse_field_override
+  allowed_override_fields:
+    - opening
+    - body
+  forbidden:
+    - gender_in_theme_scoring
+    - gender_in_variant_scoring
+    - infer_gender_from_name
+    - global_string_replacement

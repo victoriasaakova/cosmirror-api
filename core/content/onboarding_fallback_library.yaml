@@ -1,0 +1,593 @@
+version: "1.1"
+locale: ru
+
+schema:
+  unit_is_atomic:
+    - opening
+    - body
+  gender_overrides_are_sparse: true
+  allowed_gender_override_fields:
+    - opening
+    - body
+  default_variants_participate_in_contextual_scoring: false
+
+editorial_revision_v1_1:
+  purpose: syntactic_diversity
+  revised_units:
+    - id: stability_vs_change.relationships
+      final_move: question
+    - id: stability_vs_change.work_path
+      final_move: conditional_test
+    - id: uncertainty_and_control.default
+      final_move: direct_lens
+    - id: uncertainty_and_control.overload
+      final_move: concrete_distinction
+    - id: autonomy_vs_closeness.relationships
+      final_move: conditional_test
+    - id: visibility_vs_self_trust.self_trust
+      final_move: question
+    - id: responsibility_vs_capacity.transition
+      final_move: observation
+    - id: belonging_vs_authenticity.identity
+      final_move: question
+    - id: clarity_vs_idealization.relationships
+      final_move: conditional_test
+    - id: clarity_vs_idealization.decision
+      final_move: concrete_distinction
+    - id: boundaries_vs_care.overload
+      final_move: direct_lens
+    - id: direction_vs_inertia.work_path
+      final_move: conditional_test
+
+canonical_bridges:
+  recognition: "Возможно, это сейчас про то, что"
+  contrast: "Здесь может быть важен один контраст:"
+  hypothesis: "Попробуй проверить такую гипотезу:"
+
+themes:
+  stability_vs_change:
+    priority: 100
+    variants:
+      default:
+        priority: 10
+        tags:
+          focuses: []
+          desired_outcomes: []
+          life_context: []
+          triggers: []
+        bridge_key: recognition
+        editorial_move: concrete_distinction
+        opening: "знакомое не всегда означает надёжное"
+        body: >-
+          Когда привычный порядок перестаёт поддерживать, за него легко держаться
+          ещё крепче. Но устойчивость и неизменность — не одно и то же: первая
+          выдерживает движение, вторая иногда лишь откладывает его.
+
+      relationships:
+        priority: 30
+        tags:
+          focuses:
+            - relationships
+          desired_outcomes:
+            - understand_relationships
+          life_context: []
+          triggers:
+            - interpersonal_trigger
+        bridge_key: hypothesis
+        editorial_move: question
+        opening: "в близости сейчас может проверяться не чувство, а форма связи"
+        body: >-
+          Иногда отношения сохраняют знакомый вид, хотя потребности внутри уже
+          изменились. Что именно хочется удержать: этого человека, привычный
+          сценарий или ощущение определённости рядом с ним?
+
+      work_path:
+        priority: 28
+        tags:
+          focuses:
+            - work_path
+            - money
+            - self_realization
+          desired_outcomes:
+            - future_direction
+            - unlock_potential
+          life_context: []
+          triggers:
+            - decision
+        bridge_key: contrast
+        editorial_move: conditional_test
+        opening: "надёжный маршрут может уже не вести туда, куда тебе нужно"
+        body: >-
+          Остаться кажется безопаснее, потому что цена этого решения знакома.
+          Если мысль о перемене возвращает энергию, а не только тревогу, возможно,
+          речь идёт не о капризе, а о выросшей потребности.
+
+      transition:
+        priority: 26
+        tags:
+          focuses: []
+          desired_outcomes:
+            - understand_life_stage
+          life_context:
+            - localized_change
+            - multi_area_change
+            - ready_for_change
+          triggers: []
+        bridge_key: recognition
+        editorial_move: observation
+        opening: "переход уже начался, даже если новая опора ещё не сложилась"
+        body: >-
+          В такой фазе старое часто теряет убедительность раньше, чем появляется
+          ясный следующий шаг. Поэтому временная шаткость говорит не только о
+          потере контроля; она отмечает промежуток между двумя способами жить.
+
+  uncertainty_and_control:
+    priority: 95
+    variants:
+      default:
+        priority: 10
+        tags:
+          focuses: []
+          desired_outcomes: []
+          life_context: []
+          triggers: []
+        bridge_key: recognition
+        editorial_move: direct_lens
+        opening: "потребность всё объяснить может быть способом снизить тревогу"
+        body: >-
+          Неопределённость заставляет ум достраивать картину и искать ещё один
+          аргумент. Линза здесь простая: отделить то, что действительно известно,
+          от того, что лишь ненадолго возвращает ощущение контроля.
+
+      decision:
+        priority: 30
+        tags:
+          focuses: []
+          desired_outcomes:
+            - future_direction
+            - reduce_uncertainty
+          life_context:
+            - unclear_context
+          triggers:
+            - decision
+        bridge_key: hypothesis
+        editorial_move: contrast
+        opening: "перед важным выбором может казаться, что без гарантии решать ещё рано"
+        body: >-
+          Один вариант может быть предсказуемее, другой — ближе по смыслу, и это
+          разные виды риска. Ясность приходит не всегда до решения; иногда она
+          появляется, когда становится понятна цена каждого пути.
+        gender_overrides:
+          female:
+            opening: "перед выбором ты можешь чувствовать, что не готова решать без гарантии"
+          male:
+            opening: "перед выбором ты можешь чувствовать, что не готов решать без гарантии"
+
+      overload:
+        priority: 25
+        tags:
+          focuses:
+            - wellbeing
+          desired_outcomes:
+            - reduce_uncertainty
+          life_context:
+            - multi_area_change
+          triggers: []
+        bridge_key: contrast
+        editorial_move: concrete_distinction
+        opening: "контроль над деталями не всегда возвращает внутреннюю опору"
+        body: >-
+          При перегрузе легко принять постоянную собранность за безопасность.
+          Проверь разницу: управление тем, что от тебя зависит, оставляет больше
+          сил; попытка предусмотреть всё обычно забирает последние.
+
+  autonomy_vs_closeness:
+    priority: 90
+    variants:
+      default:
+        priority: 10
+        tags:
+          focuses: []
+          desired_outcomes: []
+          life_context: []
+          triggers: []
+        bridge_key: contrast
+        editorial_move: contrast
+        opening: "потребности в близости и свободе могут звучать одновременно"
+        body: >-
+          Желание пространства не отменяет привязанность, а тяга к контакту не
+          требует отказаться от себя. Напряжение растёт, когда одну из этих
+          потребностей приходится доказывать ценой другой.
+
+      relationships:
+        priority: 30
+        tags:
+          focuses:
+            - relationships
+          desired_outcomes:
+            - understand_relationships
+          life_context: []
+          triggers:
+            - interpersonal_trigger
+        bridge_key: hypothesis
+        editorial_move: conditional_test
+        opening: "дистанция может защищать не от близости, а от потери себя"
+        body: >-
+          Если после сближения появляется желание резко отойти, не спеши считать
+          это отсутствием чувств. Возможно, контакт стал теснее, чем позволяют
+          нынешние границы, и сначала нужно вернуть себе место внутри связи.
+
+      boundaries:
+        priority: 26
+        tags:
+          focuses:
+            - identity
+            - relationships
+          desired_outcomes:
+            - recognize_patterns
+          life_context: []
+          triggers:
+            - self_understanding
+        bridge_key: recognition
+        editorial_move: question
+        opening: "свобода становится острее там, где согласие перестаёт быть свободным"
+        body: >-
+          Можно долго оставаться рядом и всё же постепенно исчезать из собственных
+          решений. В каком месте твоё «да» уже поддерживает мир между людьми, но
+          больше не выражает тебя?
+
+  visibility_vs_self_trust:
+    priority: 85
+    variants:
+      default:
+        priority: 10
+        tags:
+          focuses: []
+          desired_outcomes: []
+          life_context: []
+          triggers: []
+        bridge_key: recognition
+        editorial_move: contrast
+        opening: "внешнее подтверждение может звучать громче собственной оценки"
+        body: >-
+          Признание приятно не только само по себе: оно на время снимает сомнение в
+          своём уровне. Но обратная сторона заметна в тишине — без отклика ценность
+          сделанного будто исчезает, хотя сама работа не изменилась.
+
+      work_path:
+        priority: 30
+        tags:
+          focuses:
+            - work_path
+            - self_realization
+          desired_outcomes:
+            - unlock_potential
+            - future_direction
+          life_context: []
+          triggers: []
+        bridge_key: hypothesis
+        editorial_move: direct_lens
+        opening: "результат может помогать почувствовать, что тебя замечают"
+        body: >-
+          Тогда обратная связь незаметно превращается из информации в меру
+          способности. Смотри не только на реакцию людей, но и на то, какие решения
+          ты продолжаешь считать точными без немедленного признания.
+        gender_overrides:
+          female:
+            opening: "результат может помогать тебе чувствовать себя замеченной"
+          male:
+            opening: "результат может помогать тебе чувствовать себя замеченным"
+
+      self_trust:
+        priority: 27
+        tags:
+          focuses:
+            - identity
+          desired_outcomes:
+            - unlock_potential
+            - recognize_patterns
+          life_context: []
+          triggers:
+            - self_understanding
+            - need_for_validation
+        bridge_key: contrast
+        editorial_move: question
+        opening: "сомнение в себе может усиливаться именно перед видимым шагом"
+        body: >-
+          Пока выбор остаётся внутренним, его почти ничего не проверяет. Когда он
+          становится заметен другим, ставка меняется. Чьё несогласие сейчас кажется
+          доказательством, что твоего основания недостаточно?
+
+  responsibility_vs_capacity:
+    priority: 80
+    variants:
+      default:
+        priority: 10
+        tags:
+          focuses: []
+          desired_outcomes: []
+          life_context: []
+          triggers: []
+        bridge_key: recognition
+        editorial_move: concrete_distinction
+        opening: "ответственность может продолжаться дольше, чем реальный ресурс"
+        body: >-
+          Надёжность помогает выдерживать многое, но не делает запас сил
+          бесконечным. Есть разница между обязательством, которое ты выбираешь, и
+          нагрузкой, которую продолжаешь нести просто по привычке.
+
+      work_path:
+        priority: 28
+        tags:
+          focuses:
+            - work_path
+            - money
+          desired_outcomes:
+            - future_direction
+          life_context:
+            - localized_change
+          triggers:
+            - decision
+        bridge_key: contrast
+        editorial_move: conditional_test
+        opening: "профессиональная стойкость может скрывать накопившееся истощение"
+        body: >-
+          Выполнять задачи по инерции ещё возможно, поэтому масштаб нагрузки легко
+          недооценить. Если отдых возвращает силы лишь на следующий рывок, вопрос
+          может быть уже не в дисциплине, а в устройстве самой работы.
+
+      transition:
+        priority: 26
+        tags:
+          focuses:
+            - wellbeing
+          desired_outcomes:
+            - understand_life_stage
+          life_context:
+            - multi_area_change
+            - ready_for_change
+          triggers: []
+        bridge_key: recognition
+        editorial_move: observation
+        opening: "переход может принести чувство усталости раньше, чем удаётся его признать"
+        body: >-
+          Одновременно завершать старое, осваивать новое и поддерживать привычный
+          темп — три разные нагрузки. Усталость здесь не обязательно означает, что
+          выбран неверный путь; возможно, изменилась доступная скорость движения.
+        gender_overrides:
+          female:
+            opening: "переход может застать тебя уставшей раньше, чем ты это признаешь"
+          male:
+            opening: "переход может застать тебя уставшим раньше, чем ты это признаешь"
+
+  belonging_vs_authenticity:
+    priority: 75
+    variants:
+      default:
+        priority: 10
+        tags:
+          focuses: []
+          desired_outcomes: []
+          life_context: []
+          triggers: []
+        bridge_key: contrast
+        editorial_move: direct_lens
+        opening: "принадлежность теряет опору, если ради неё приходится уменьшать себя"
+        body: >-
+          Занимать понятное место в группе безопаснее, чем показывать то, что может
+          не совпасть с её ожиданиями. Центральная линза — не «подхожу ли я», а «какую
+          часть себя я оставляю за дверью, чтобы продолжать подходить».
+
+      relationships:
+        priority: 30
+        tags:
+          focuses:
+            - relationships
+          desired_outcomes:
+            - understand_relationships
+          life_context: []
+          triggers:
+            - interpersonal_trigger
+        bridge_key: hypothesis
+        editorial_move: concrete_distinction
+        opening: "получить принятие — не то же самое, что позволить себя узнать"
+        body: >-
+          Отношения могут оставаться тёплыми, пока в них видят удобную и знакомую
+          версию тебя. Близость начинается в другом месте: там, где различия не
+          нужно прятать, чтобы сохранить контакт.
+        gender_overrides:
+          female:
+            opening: "быть принятой — не то же самое, что быть узнанной"
+          male:
+            opening: "быть принятым — не то же самое, что быть узнанным"
+
+      identity:
+        priority: 27
+        tags:
+          focuses:
+            - identity
+            - self_realization
+          desired_outcomes:
+            - unlock_potential
+            - recognize_patterns
+          life_context:
+            - stable
+          triggers:
+            - self_understanding
+        bridge_key: recognition
+        editorial_move: question
+        opening: "привычная роль может давать место среди людей и теснить одновременно"
+        body: >-
+          Роль становится невидимой, когда окружающие давно считают её твоей
+          природой. Если убрать ожидание соответствовать этой роли, что останется
+          живым, а что окажется только способом не выпадать из круга?
+
+  clarity_vs_idealization:
+    priority: 70
+    variants:
+      default:
+        priority: 10
+        tags:
+          focuses: []
+          desired_outcomes: []
+          life_context: []
+          triggers: []
+        bridge_key: recognition
+        editorial_move: observation
+        opening: "красивая версия происходящего может заполнять пробелы быстрее фактов"
+        body: >-
+          Когда ясности мало, воображение не остаётся пустым: оно связывает детали
+          в убедительную историю. История может оказаться верной, но её цель сейчас
+          может быть другой — сделать ожидание переносимее.
+
+      relationships:
+        priority: 30
+        tags:
+          focuses:
+            - relationships
+          desired_outcomes:
+            - understand_relationships
+          life_context: []
+          triggers:
+            - interpersonal_trigger
+            - need_for_validation
+        bridge_key: hypothesis
+        editorial_move: conditional_test
+        opening: "неясность другого человека легко принять за скрытую глубину"
+        body: >-
+          Молчание оставляет место и для надежды, и для тревоги. Если предполагаемый
+          мотив нельзя проверить ни словами, ни поступками, относись к нему как к
+          версии — не как к основанию для решения.
+
+      decision:
+        priority: 28
+        tags:
+          focuses:
+            - work_path
+            - self_realization
+          desired_outcomes:
+            - future_direction
+            - reduce_uncertainty
+          life_context:
+            - ready_for_change
+            - unclear_context
+          triggers:
+            - decision
+        bridge_key: contrast
+        editorial_move: concrete_distinction
+        opening: "можно влюбиться в сценарий раньше, чем проверить сам путь"
+        body: >-
+          Образ будущего даёт энергию, но иногда скрывает цену ежедневных действий.
+          Отдели привлекательность результата от согласия жить процессом: второе
+          обычно точнее показывает, подходит ли направление.
+
+  boundaries_vs_care:
+    priority: 65
+    variants:
+      default:
+        priority: 10
+        tags:
+          focuses: []
+          desired_outcomes: []
+          life_context: []
+          triggers: []
+        bridge_key: recognition
+        editorial_move: concrete_distinction
+        opening: "забота перестаёт быть свободной, когда чужое состояние становится обязанностью"
+        body: >-
+          Поддерживать человека и отвечать за его внутреннее равновесие — разные
+          задачи. Вторая незаметно делает любую границу похожей на отказ, хотя
+          граница может быть условием честной заботы, а не её противоположностью.
+
+      relationships:
+        priority: 30
+        tags:
+          focuses:
+            - relationships
+          desired_outcomes:
+            - understand_relationships
+            - recognize_patterns
+          life_context: []
+          triggers:
+            - interpersonal_trigger
+        bridge_key: hypothesis
+        editorial_move: question
+        opening: "чувство вины может появляться раньше, чем ты успеваешь услышать своё «нет»"
+        body: >-
+          Тогда согласие сохраняет спокойствие в моменте, но переносит напряжение
+          внутрь. Если отказ кажется жестокостью, кому именно ты оставляешь право
+          определять допустимую цену твоей близости?
+
+      overload:
+        priority: 27
+        tags:
+          focuses:
+            - wellbeing
+          desired_outcomes:
+            - reduce_uncertainty
+          life_context:
+            - multi_area_change
+          triggers: []
+        bridge_key: contrast
+        editorial_move: direct_lens
+        opening: "помощь другим может маскировать момент, когда помощь уже нужна тебе"
+        body: >-
+          В перегрузе привычная полезность даёт ощущение порядка и потому держится
+          дольше ресурса. Смотри на раздражение не как на провал заботы, а как на
+          запоздалый сигнал о границе собственной ёмкости.
+
+  direction_vs_inertia:
+    priority: 60
+    variants:
+      default:
+        priority: 10
+        tags:
+          focuses: []
+          desired_outcomes: []
+          life_context: []
+          triggers: []
+        bridge_key: recognition
+        editorial_move: question
+        opening: "движение может продолжаться даже после того, как направление потеряло смысл"
+        body: >-
+          Инерция выглядит убедительно: есть дела, обязательства и уже вложенные
+          силы. Но если убрать аргумент «здесь уже столько вложено», что в этом пути
+          всё ещё выбирается сегодня?
+
+      work_path:
+        priority: 30
+        tags:
+          focuses:
+            - work_path
+            - money
+            - self_realization
+          desired_outcomes:
+            - future_direction
+            - unlock_potential
+          life_context:
+            - stable
+            - localized_change
+          triggers:
+            - decision
+        bridge_key: contrast
+        editorial_move: conditional_test
+        opening: "следующий шаг может требовать не ускорения, а проверки курса"
+        body: >-
+          Больше усилий помогает, когда цель по-прежнему твоя. Если каждый новый
+          результат приносит только короткое облегчение, возможно, проблема не в
+          темпе — сам маршрут больше не отвечает на исходный вопрос.
+
+global_fallback:
+  priority: 0
+  tags:
+    focuses: []
+    desired_outcomes: []
+    life_context: []
+    triggers: []
+  bridge_key: hypothesis
+  editorial_move: direct_lens
+  opening: "карта может быть полезна не как ответ, а как способ точнее задать вопрос"
+  body: >-
+    Сейчас данных недостаточно для уверенного персонального вывода. Поэтому лучше
+    взять эту интерпретацию как гипотезу и сверить её с опытом: где она проясняет
+    происходящее, а где не совпадает с твоей реальностью.
