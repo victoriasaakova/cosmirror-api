@@ -721,6 +721,7 @@ class MeReportView(APIView):
             from core.services.report_jobs import kickoff_paid_report_for_order
 
             kickoff_paid_report_for_order(order, retry_failed=False)
+            order.refresh_from_db()
         return Response(OrderSerializer(order).data)
 
 
@@ -933,6 +934,7 @@ class MeReportConfirmPaymentView(APIView):
             from core.services.report_jobs import kickoff_paid_report_for_order
 
             kickoff_paid_report_for_order(order, retry_failed=False)
+            order.refresh_from_db()
         return Response(OrderSerializer(order).data)
 
 
