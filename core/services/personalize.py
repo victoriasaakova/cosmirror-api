@@ -164,9 +164,8 @@ def _has_funnel_structure(insight: Optional[dict[str, Any]]) -> bool:
     body = str(insight.get("body") or "").strip()
     if not isinstance(opening, dict):
         return False
-    bridge = str(opening.get("bridge") or "").strip()
     clause = str(opening.get("insight") or "").strip()
-    return bool(bridge and clause and len(body) >= 60)
+    return bool(clause and len(body) >= 60)
 
 
 def is_personalized(insight: Optional[dict[str, Any]]) -> bool:

@@ -257,12 +257,8 @@ def _realize_gender(unit: dict[str, Any], gender: str) -> dict[str, str]:
 
 
 def _render_opening(unit: dict[str, Any], gender: str) -> dict[str, str]:
-    library = load_onboarding_fallback_library()
-    bridges = library.get("canonical_bridges") or {}
     realized = _realize_gender(unit, gender)
-    bridge_key = str(unit.get("bridge_key") or "recognition")
-    bridge = str(bridges.get(bridge_key) or bridges.get("recognition") or "").strip()
-    return {"bridge": bridge, "insight": realized["opening"]}
+    return {"bridge": "", "insight": realized["opening"]}
 
 
 def build_onboarding_fallback(

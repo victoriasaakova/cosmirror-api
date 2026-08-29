@@ -36,8 +36,12 @@ class OnboardingFallbackLibraryTests(SimpleTestCase):
             self.assertEqual(tags["life_context"], [])
             self.assertEqual(tags["triggers"], [])
             variants += len(theme["variants"])
+            for variant in theme["variants"].values():
+                self.assertNotIn("bridge_key", variant)
         self.assertEqual(variants, 27)
         self.assertIn("opening", library["global_fallback"])
+        self.assertNotIn("canonical_bridges", library)
+        self.assertNotIn("bridge_key", library["global_fallback"])
 
 
 class OnboardingFallbackScoringTests(SimpleTestCase):
@@ -78,8 +82,9 @@ class OnboardingFallbackScoringTests(SimpleTestCase):
         self.assertEqual(payload["fallback_variant"], "global_fallback")
         self.assertEqual(
             payload["opening"]["insight"],
-            "карта может быть полезна не как ответ, а как способ точнее задать вопрос",
+            "сейчас карта полезнее как точный вопрос, а не как готовый ответ",
         )
+        self.assertEqual(payload["opening"]["bridge"], "")
         self.assertTrue(payload["body"])
 
     def test_curiosity_does_not_select_variant(self):
@@ -111,19 +116,47 @@ class OnboardingFallbackScoringTests(SimpleTestCase):
         self.assertEqual(female["fallback_theme"], male["fallback_theme"])
         self.assertEqual(female["fallback_variant"], male["fallback_variant"])
         self.assertEqual(female["fallback_theme"], "responsibility_vs_capacity")
-        self.assertEqual(female["opening"]["bridge"], male["opening"]["bridge"])
+        self.assertEqual(female["opening"]["bridge"], "")
+        self.assertEqual(male["opening"]["bridge"], "")
 
-    def test_opening_is_api_object(self):
+    def test_opening_is_api_object_without_bridge_copy(self):
         payload = build_onboarding_fallback(
             insight=_insight_with("saturn_on_moon"),
             natal={},
             quiz={"focus": ["energy"]},
         )
-        self.assertIn("bridge", payload["opening"])
-        self.assertIn("insight", payload["opening"])
+        self.assertEqual(payload["opening"]["bridge"], "")
+        self.assertTrue(payload["opening"]["insight"])
         self.assertNotIn("bridge_key", payload["opening"])
-        bridges = load_onboarding_fallback_library()["canonical_bridges"]
-        self.assertIn(payload["opening"]["bridge"], bridges.values())
+        self.assertNotIn("canonical_bridges", load_onboarding_fallback_library())
+
+    def test_relationships_opening_is_self_contained(self):
+        payload = build_onboarding_fallback(
+            insight=_insight_with("uranus_on_moon", "pluto_on_mars"),
+            natal={},
+            quiz={"focus": ["love"]},
+        )
+        self.assertEqual(payload["fallback_theme"], "stability_vs_change")
+        self.assertEqual(payload["fallback_variant"], "relationships")
+        self.assertEqual(
+            payload["opening"]["insight"],
+            "сейчас в близости может проявляться не чувство, а форма связи",
+        )
+        self.assertEqual(payload["opening"]["bridge"], "")
+
+    def test_work_path_opening_is_self_contained(self):
+        payload = build_onboarding_fallback(
+            insight=_insight_with("uranus_on_moon", "pluto_on_mars"),
+            natal={},
+            quiz={"focus": ["path"]},
+        )
+        self.assertEqual(payload["fallback_theme"], "stability_vs_change")
+        self.assertEqual(payload["fallback_variant"], "work_path")
+        self.assertEqual(
+            payload["opening"]["insight"],
+            "сейчас надёжный маршрут может уже не вести туда, куда тебе нужно",
+        )
+        self.assertEqual(payload["opening"]["bridge"], "")
 
     def test_all_focuses_preserved(self):
         context = normalize_onboarding({"focus": ["love", "path", "money"]})
