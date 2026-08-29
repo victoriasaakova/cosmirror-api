@@ -32,6 +32,28 @@ from core.services.prodamus import (
 from core.services.yandex_oauth import issue_auth_token
 
 
+class CorsHeadersTests(TestCase):
+    def test_onboarding_preflight_allows_posthog_tracing_headers(self):
+        response = self.client.options(
+            "/api/onboarding/sessions/",
+            HTTP_ORIGIN="http://localhost:3000",
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS=(
+                "content-type,x-posthog-session-id,x-posthog-window-id,x-posthog-distinct-id"
+            ),
+        )
+        self.assertEqual(response.status_code, 200)
+        allowed = {
+            header.strip().lower()
+            for header in (response.get("Access-Control-Allow-Headers") or "").split(",")
+            if header.strip()
+        }
+        self.assertIn("content-type", allowed)
+        self.assertIn("x-posthog-session-id", allowed)
+        self.assertIn("x-posthog-window-id", allowed)
+        self.assertIn("x-posthog-distinct-id", allowed)
+
+
 def _make_user(*, email="buyer@example.com", yandex_id="1000034426"):
     user = User.objects.create_user(
         username=f"yandex_{yandex_id}_{email.split('@')[0]}"[:150],

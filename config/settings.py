@@ -5,6 +5,7 @@ Django settings for Cosmirror API.
 from pathlib import Path
 import os
 
+from corsheaders.defaults import default_headers
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -113,13 +114,11 @@ CORS_ALLOWED_ORIGINS = [
 ]
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = (
-    "accept",
-    "authorization",
-    "content-type",
-    "user-agent",
-    "x-csrftoken",
-    "x-requested-with",
+    *default_headers,
     "idempotency-key",
+    "x-posthog-session-id",
+    "x-posthog-window-id",
+    "x-posthog-distinct-id",
 )
 
 # Trust X-Forwarded-Proto from nginx when serving HTTPS
