@@ -13,6 +13,7 @@ from django.db.models import Q
 from core.models import NatalChart, OnboardingSession, Order, Profile, WaitlistLead
 from core.services.geo import GeoLookupError
 from core.services.natal import NatalCalcError
+from core.services.natal_common import public_natal_error
 from core.services.onboarding_astro import calculate_and_store_chart
 
 
@@ -226,8 +227,10 @@ def update_user_birth(user: User, payload: dict[str, Any]) -> dict[str, Any]:
 
     try:
         chart = calculate_and_store_chart(chart)
-    except (GeoLookupError, NatalCalcError) as exc:
+    except GeoLookupError as exc:
         raise BirthUpdateError(str(exc), "astro") from exc
+    except NatalCalcError as exc:
+        raise BirthUpdateError(public_natal_error(exc), "astro") from exc
 
     profile.birth_date = chart.birth_date
     profile.birth_time = chart.birth_time

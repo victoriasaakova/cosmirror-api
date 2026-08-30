@@ -159,3 +159,77 @@ class NatalChartSkillTests(TestCase):
         self.assertTrue(keys)
         self.assertNotIn("general_watch", keys)
         self.assertIn("saturn_on_moon", keys)
+
+    def test_public_natal_error_hides_engine_internals(self):
+        from core.services.natal_common import CHART_CALC_USER_ERROR, public_natal_error
+
+        self.assertEqual(
+            public_natal_error(NatalCalcError("Unexpected Swiss Ephemeris mode retflag=260")),
+            CHART_CALC_USER_ERROR,
+        )
+        self.assertEqual(
+            public_natal_error(NatalCalcError("Неизвестная таймзона: Not/AZone")),
+            "Неизвестная таймзона: Not/AZone",
+        )
+
+    def test_truncated_ephemeris_files_are_replaced(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from core.services import swiss_engine
+
+        source = Path(__file__).resolve().parent / "services" / "ephemeris" / "swiss"
+        swiss_engine.reset_ephemeris_state()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                dest = Path(tmp)
+                for name in swiss_engine._NEEDED_FILES:
+                    (dest / name).write_bytes(b"not-a-real-ephemeris")
+
+                def fake_download(directory: Path, name: str) -> None:
+                    (directory / name).write_bytes((source / name).read_bytes())
+
+                with patch.dict(os.environ, {"SWISSEPH_PATH": str(dest)}), patch.object(
+                    swiss_engine, "_download_ephe_file", side_effect=fake_download
+                ):
+                    natal = calculate_natal(**GDYNIA)
+            self.assertEqual(natal["ascendant"]["sign"], "scorpio")
+        finally:
+            swiss_engine.reset_ephemeris_state()
+
+
+class OnboardingBirthErrorTests(TestCase):
+    def test_birth_step_hides_swiss_retflag_from_user(self):
+        from unittest.mock import patch
+
+        from core.models import OnboardingStep, OnboardingSession
+        from core.services.natal_common import CHART_CALC_USER_ERROR
+
+        OnboardingStep.objects.create(
+            slug="birth",
+            title="Данные рождения",
+            step_type=OnboardingStep.StepType.BIRTH_DATA,
+            order=1,
+            is_active=True,
+        )
+        session = OnboardingSession.objects.create()
+        with patch(
+            "core.services.onboarding_astro.calculate_and_store_chart",
+            side_effect=NatalCalcError("Unexpected Swiss Ephemeris mode retflag=260"),
+        ):
+            response = self.client.put(
+                f"/api/onboarding/sessions/{session.token}/steps/birth/",
+                {
+                    "payload": {
+                        "birth_date": "1995-05-26",
+                        "birth_place": "Гдыня, Польша",
+                        "birth_time": "19:25",
+                    },
+                    "completed": True,
+                },
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["payload"]["astro"], [CHART_CALC_USER_ERROR])

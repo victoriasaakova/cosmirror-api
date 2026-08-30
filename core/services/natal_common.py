@@ -42,6 +42,36 @@ class NatalCalcError(Exception):
     pass
 
 
+CHART_CALC_USER_ERROR = (
+    "Не получилось посчитать карту. Перезагрузи страницу и попробуй ещё раз."
+)
+
+_TECHNICAL_NATAL_MARKERS = (
+    "swiss",
+    "ephemeris",
+    "retflag",
+    "placidus",
+    "non-finite",
+    "calc failed",
+    "missing in",
+    "download from",
+    "invalid birth",
+    "unexpected",
+    "traceback",
+)
+
+
+def public_natal_error(exc: BaseException) -> str:
+    """User-facing natal/geo error. Engine internals stay in logs and chart.error_message."""
+    text = str(exc).strip()
+    if not text:
+        return CHART_CALC_USER_ERROR
+    lowered = text.lower()
+    if any(marker in lowered for marker in _TECHNICAL_NATAL_MARKERS):
+        return CHART_CALC_USER_ERROR
+    return text
+
+
 def normalize_longitude(value: float) -> float:
     return float(value) % 360.0
 

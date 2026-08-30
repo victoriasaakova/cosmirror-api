@@ -7,7 +7,12 @@ Skill 01: тропический зодиак, Плацидус, True Node.
 
 from __future__ import annotations
 
+import logging
 import math
+import os
+import threading
+import urllib.error
+import urllib.request
 from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -38,10 +43,20 @@ from core.services.natal_orbs import (
 
 ENGINE_ID = "swiss_ephemeris"
 SCHEMA_VERSION = "natal-chart-v1"
+logger = logging.getLogger(__name__)
 
-_EPHE_DIR = Path(__file__).resolve().parent / "ephemeris" / "swiss"
-_EPHE_DIR.mkdir(parents=True, exist_ok=True)
-_NEEDED_FILES = ("sepl_18.se1", "semo_18.se1", "seas_18.se1")
+_DEFAULT_EPHE_DIR = Path(__file__).resolve().parent / "ephemeris" / "swiss"
+_NEEDED_FILES: dict[str, int] = {
+    "sepl_18.se1": 100_000,
+    "semo_18.se1": 400_000,
+    "seas_18.se1": 50_000,
+}
+_EPHE_MIRRORS = (
+    "https://cdn.jsdelivr.net/gh/aloistr/swisseph@master/ephe/{name}",
+    "https://raw.githubusercontent.com/aloistr/swisseph/master/ephe/{name}",
+)
+_EPHE_UA = "CosmirrorNatal/1.0 (contact=hello@cosmirror.ru)"
+_LOCK = threading.Lock()
 
 PLANETS: dict[str, int] = {
     "sun": swe.SUN,
@@ -72,19 +87,111 @@ ASPECT_BODY_IDS = CLASSICAL_IDS + ("north_node", "chiron", "vesta", "asc", "mc")
 _READY = False
 
 
+def _ephe_dir() -> Path:
+    override = (os.environ.get("SWISSEPH_PATH") or "").strip()
+    return Path(override) if override else _DEFAULT_EPHE_DIR
+
+
+def _file_is_usable(path: Path, minimum: int) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size >= minimum
+    except OSError:
+        return False
+
+
+def _missing_ephe_files(directory: Path) -> list[str]:
+    return [
+        name
+        for name, minimum in _NEEDED_FILES.items()
+        if not _file_is_usable(directory / name, minimum)
+    ]
+
+
+def _download_ephe_file(directory: Path, name: str) -> None:
+    destination = directory / name
+    last_error: Optional[Exception] = None
+    for template in _EPHE_MIRRORS:
+        url = template.format(name=name)
+        tmp_path = destination.with_suffix(destination.suffix + ".tmp")
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": _EPHE_UA})
+            with urllib.request.urlopen(request, timeout=45) as response:
+                payload = response.read()
+            if len(payload) < _NEEDED_FILES[name]:
+                raise NatalCalcError(
+                    f"Swiss Ephemeris download too small for {name}: {len(payload)} bytes"
+                )
+            tmp_path.write_bytes(payload)
+            tmp_path.replace(destination)
+            logger.info("Downloaded Swiss Ephemeris file %s (%s bytes)", name, len(payload))
+            return
+        except (urllib.error.URLError, TimeoutError, OSError, NatalCalcError) as exc:
+            last_error = exc
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            logger.warning("Swiss Ephemeris download failed for %s from %s: %s", name, url, exc)
+    raise NatalCalcError(
+        f"Swiss Ephemeris files missing in {directory}: {name}. "
+        f"Last download error: {last_error}"
+    ) from last_error
+
+
+def _bind_ephe_path(directory: Path) -> None:
+    try:
+        swe.close()
+    except Exception:
+        pass
+    # Trailing separator is required on some pyswisseph builds.
+    swe.set_ephe_path(str(directory) + os.sep)
+
+
+def _probe_swieph() -> tuple[bool, int]:
+    jd = swe.julday(1995, 5, 26, 17.0 + 25.0 / 60.0, swe.GREG_CAL)
+    _xx, retflag = swe.calc_ut(jd, swe.SUN, swe.FLG_SWIEPH | swe.FLG_SPEED)
+    ok = retflag >= 0 and bool(retflag & swe.FLG_SWIEPH)
+    return ok, int(retflag)
+
+
+def reset_ephemeris_state() -> None:
+    """Test helper: drop the process-level Swiss init cache."""
+    global _READY
+    _READY = False
+    try:
+        swe.close()
+    except Exception:
+        pass
+
+
 def _ensure_ephemeris() -> None:
     global _READY
     if _READY:
         return
-    swe.set_ephe_path(str(_EPHE_DIR))
-    missing = [name for name in _NEEDED_FILES if not (_EPHE_DIR / name).exists()]
-    if missing:
-        raise NatalCalcError(
-            "Swiss Ephemeris files missing in "
-            f"{_EPHE_DIR}: {', '.join(missing)}. "
-            "Download from https://www.astro.com/ftp/swisseph/ephe/"
-        )
-    _READY = True
+    with _LOCK:
+        if _READY:
+            return
+        directory = _ephe_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        missing = _missing_ephe_files(directory)
+        if missing:
+            logger.warning("Swiss Ephemeris files missing or truncated in %s: %s", directory, missing)
+            for name in missing:
+                _download_ephe_file(directory, name)
+        _bind_ephe_path(directory)
+        ok, retflag = _probe_swieph()
+        if not ok:
+            logger.error(
+                "Swiss Ephemeris probe used unexpected mode retflag=%s; re-downloading files",
+                retflag,
+            )
+            for name in _NEEDED_FILES:
+                _download_ephe_file(directory, name)
+            _bind_ephe_path(directory)
+            ok, retflag = _probe_swieph()
+        if not ok:
+            raise NatalCalcError(f"Unexpected Swiss Ephemeris mode retflag={retflag}")
+        _READY = True
 
 
 def _jd_ut(dt_utc: datetime) -> float:

@@ -304,12 +304,17 @@ class OnboardingStepSubmitSerializer(serializers.Serializer):
 
             from core.services.geo import GeoLookupError
             from core.services.natal import NatalCalcError
+            from core.services.natal_common import public_natal_error
             from core.services.onboarding_astro import calculate_and_store_chart
 
             try:
                 chart = calculate_and_store_chart(chart)
-            except (GeoLookupError, NatalCalcError) as exc:
+            except GeoLookupError as exc:
                 raise serializers.ValidationError({"payload": {"astro": [str(exc)]}}) from exc
+            except NatalCalcError as exc:
+                raise serializers.ValidationError(
+                    {"payload": {"astro": [public_natal_error(exc)]}}
+                ) from exc
 
             # Синхронизируем гео, которое добрал сервис (таймзона/координаты)
             session.birth_place = chart.birth_place
