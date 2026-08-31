@@ -74,6 +74,12 @@ urlpatterns = [
     # Гео для онбординга
     path("geo/lookup/", views.GeoLookupView.as_view(), name="geo-lookup"),
     path("geo/suggest/", views.GeoSuggestView.as_view(), name="geo-suggest"),
+    path("landing/chart/", views.LandingChartView.as_view(), name="landing-chart"),
+    path(
+        "landing/chart/<uuid:token>/",
+        views.LandingChartDetailView.as_view(),
+        name="landing-chart-detail",
+    ),
     # Вводы в продукте
     path("inputs/", views.UserInputListCreateView.as_view(), name="user-inputs"),
     # Астро

@@ -233,3 +233,73 @@ class OnboardingBirthErrorTests(TestCase):
             )
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["payload"]["astro"], [CHART_CALC_USER_ERROR])
+
+
+class LandingChartApiTests(TestCase):
+    def test_post_returns_wheel_without_completing_birth_step(self):
+        from core.models import NatalChart, OnboardingSession, OnboardingStep
+
+        OnboardingStep.objects.create(
+            slug="name",
+            title="Имя",
+            step_type=OnboardingStep.StepType.CONTENT,
+            order=10,
+            is_active=True,
+        )
+        OnboardingStep.objects.create(
+            slug="birth",
+            title="Данные рождения",
+            step_type=OnboardingStep.StepType.BIRTH_DATA,
+            order=20,
+            is_active=True,
+        )
+        response = self.client.post(
+            "/api/landing/chart/",
+            {
+                "birth_date": "1995-05-26",
+                "birth_time": "19:25",
+                "birth_place": "Gdynia",
+                "birth_lat": 54.516498,
+                "birth_lng": 18.540274,
+                "timezone": "Europe/Warsaw",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        data = response.json()
+        self.assertTrue(data["token"])
+        self.assertTrue(data["has_birth_time"])
+        self.assertEqual(data["birth"]["birth_time"], "19:25")
+        self.assertTrue(data["wheel"]["planets"])
+        self.assertEqual(len(data["wheel"]["houses"]), 12)
+        self.assertEqual(data["birth"]["birth_date"], "1995-05-26")
+        self.assertEqual(data["birth"]["birth_place"], "Gdynia")
+        session = OnboardingSession.objects.get(token=data["token"])
+        self.assertEqual(str(session.birth_time)[:5], "19:25")
+        self.assertFalse(session.answers.filter(completed=True).exists())
+        chart = NatalChart.objects.get(session=session)
+        self.assertEqual(chart.status, NatalChart.Status.READY)
+        self.assertNotIn("insight", chart.chart_data)
+
+        restored = self.client.get(f"/api/landing/chart/{data['token']}/")
+        self.assertEqual(restored.status_code, 200)
+        self.assertEqual(restored.json()["token"], data["token"])
+        self.assertEqual(
+            restored.json()["wheel"]["ascendant_longitude"],
+            data["wheel"]["ascendant_longitude"],
+        )
+
+        again = self.client.post(
+            "/api/landing/chart/",
+            {
+                "token": data["token"],
+                "birth_date": "1993-08-21",
+                "birth_place": "Gdynia",
+                "birth_lat": 54.516498,
+                "birth_lng": 18.540274,
+                "timezone": "Europe/Warsaw",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(again.status_code, 200, again.content)
+        self.assertEqual(again.json()["birth"]["birth_date"], "1995-05-26")

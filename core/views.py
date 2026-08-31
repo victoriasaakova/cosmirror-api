@@ -38,8 +38,10 @@ from .serializers import (
     WaitlistLeadSerializer,
 )
 from .services.geo import GeoLookupError, lookup_place, suggest_places
+from .services.landing_chart import calculate_landing_wheel, wheel_for_session
 from .services.insight import build_insight
-from .services.natal import calculate_sky_now
+from .services.natal import NatalCalcError, calculate_sky_now
+from .services.natal_common import public_natal_error
 from .services.onboarding_astro import build_chart_and_insight
 from .services.orders import (
     OrderError,
@@ -548,6 +550,72 @@ class GeoSuggestView(APIView):
                 ]
             }
         )
+
+
+class LandingChartView(APIView):
+    """Swiss-колесо для лендинга: без инсайта и без завершения шага birth."""
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = [BearerTokenAuthentication]
+
+    def post(self, request):
+        payload = request.data if isinstance(request.data, dict) else {}
+        birth_date = str(payload.get("birth_date") or "").strip()
+        if not birth_date:
+            return Response(
+                {"detail": "Нужна дата рождения."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        birth_place = str(payload.get("birth_place") or "").strip()
+        lat = payload.get("birth_lat")
+        lng = payload.get("birth_lng")
+        has_coords = lat not in (None, "") and lng not in (None, "")
+        if not birth_place and not has_coords:
+            return Response(
+                {"detail": "Нужен город рождения."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user = request.user if getattr(request.user, "is_authenticated", False) else None
+        unknown_time = bool(payload.get("unknown_time"))
+        try:
+            data = calculate_landing_wheel(
+                token=str(payload.get("token") or "").strip() or None,
+                birth_date=birth_date,
+                birth_time=payload.get("birth_time"),
+                unknown_time=unknown_time,
+                birth_place=birth_place,
+                birth_lat=float(lat) if has_coords else None,
+                birth_lng=float(lng) if has_coords else None,
+                timezone_name=str(payload.get("timezone") or ""),
+                user=user,
+            )
+        except GeoLookupError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except NatalCalcError as exc:
+            return Response(
+                {"detail": public_natal_error(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Не получилось прочитать данные рождения."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(data)
+
+
+class LandingChartDetailView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, token):
+        session = get_object_or_404(OnboardingSession, token=token)
+        try:
+            return Response(wheel_for_session(session))
+        except LookupError:
+            return Response(
+                {"detail": "Карта ещё не посчитана."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
 
 class OnboardingInsightView(APIView):
