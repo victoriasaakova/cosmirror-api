@@ -283,7 +283,7 @@ class AuthDevLoginView(APIView):
         if user_data["has_paid_report"]:
             from core.services.report_jobs import kickoff_paid_report_for_user
 
-            kickoff_paid_report_for_user(user, retry_failed=True)
+            kickoff_paid_report_for_user(user, retry_failed=False)
         return Response(
             {
                 "token": auth_token.key,
@@ -313,7 +313,7 @@ class YandexAuthCallbackView(APIView):
         if _has_paid_report(_user):
             from core.services.report_jobs import kickoff_paid_report_for_user
 
-            kickoff_paid_report_for_user(_user, retry_failed=True)
+            kickoff_paid_report_for_user(_user, retry_failed=False)
         dest = (
             f"{frontend}/account/"
             if _has_paid_report(_user)
@@ -337,7 +337,7 @@ class YandexAuthCallbackView(APIView):
         if user_data["has_paid_report"]:
             from core.services.report_jobs import kickoff_paid_report_for_user
 
-            kickoff_paid_report_for_user(user, retry_failed=True)
+            kickoff_paid_report_for_user(user, retry_failed=False)
         return Response(
             {
                 "token": auth_token.key,

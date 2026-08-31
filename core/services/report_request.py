@@ -130,11 +130,6 @@ def request_blocks_from_payload(payload: dict[str, Any]) -> list[dict[str, str]]
         if not isinstance(row, dict):
             continue
         text = str(row.get("text") or "").strip()
-        source = str(row.get("source_id") or row.get("source") or "").strip()
-        source_type = str(row.get("source_type") or "").strip()
-        meta = " · ".join(part for part in (source_type, source) if part)
-        if meta:
-            text = f"{meta}\n\n{text}".strip() if text else meta
         if not text and not row.get("title"):
             continue
         blocks.append(
@@ -162,9 +157,6 @@ def request_blocks_from_payload(payload: dict[str, Any]) -> list[dict[str, str]]
     resource = payload.get("resource") if isinstance(payload.get("resource"), dict) else {}
     if resource.get("text") or resource.get("title"):
         text = str(resource.get("text") or "").strip()
-        source = str(resource.get("source_id") or resource.get("source") or "").strip()
-        if source:
-            text = f"{source}\n\n{text}".strip() if text else source
         blocks.append(
             {
                 "title": str(resource.get("title") or "На что можно опереться"),

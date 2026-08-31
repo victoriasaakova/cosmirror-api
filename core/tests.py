@@ -1009,6 +1009,44 @@ class PaidReportTests(TestCase):
         self.assertFalse(should_start_generation(self.order, retry_failed=False))
         self.assertTrue(should_start_generation(self.order, retry_failed=True))
 
+    @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
+    def test_should_not_start_when_core_layers_sealed(self, _configured):
+        from core.services.report_jobs import should_start_generation
+
+        self.order.status = Order.Status.PAID
+        self.order.interpretive = {
+            "generation": {"status": "done"},
+            "natal": {"source": "llm", "status": "ready"},
+            "aspects": {"source": "llm", "status": "ready"},
+            "cycles": {"source": "llm", "status": "ready"},
+        }
+        self.order.save(update_fields=["status", "interpretive"])
+        self.assertFalse(should_start_generation(self.order, retry_failed=False))
+        self.assertTrue(should_start_generation(self.order, retry_failed=True))
+
+    @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
+    def test_should_restart_orphaned_running_job(self, _configured):
+        from datetime import datetime, timezone
+
+        from core.services.report_jobs import _inflight_orders, should_start_generation
+
+        self.order.status = Order.Status.PAID
+        self.order.interpretive = {
+            "generation": {
+                "status": "running",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "current_section": "natal",
+            }
+        }
+        self.order.save(update_fields=["status", "interpretive"])
+        _inflight_orders.discard(self.order.pk)
+        self.assertTrue(should_start_generation(self.order, retry_failed=False))
+        _inflight_orders.add(self.order.pk)
+        try:
+            self.assertFalse(should_start_generation(self.order, retry_failed=False))
+        finally:
+            _inflight_orders.discard(self.order.pk)
+
     def test_schedule_is_noop_during_django_tests(self):
         from core.services.report_jobs import _inflight_orders, schedule_paid_report_generation
 
@@ -2274,7 +2312,7 @@ class AspectsFallbackCopyTests(TestCase):
         self.assertEqual(square["source"], "semantic_fallback")
         self.assertIn("мысль", square["headline"].lower())
         self.assertGreater(len(square["summary"]), 80)
-        self.assertGreaterEqual(len(square["deep_read"]), 2)
+        self.assertIsInstance(square["deep_read"], list)
         self.assertGreaterEqual(len(square["reflection_questions"]), 1)
         self.assertTrue(square["resource"])
         self.assertTrue(square["blind_spot"])

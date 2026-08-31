@@ -1,8 +1,9 @@
 """
 Генерация LLM-слоёв платного отчёта.
 
-Оплата и логин стартуют job. Кабинет не открывает отчёт, пока job не
-закончится: пользователь ждёт прелоадер, затем видит LLM-текст.
+Оплата стартует job. GET сразу отдаёт fallback shell — кабинет открывается
+по нему, LLM overlays natal/aspects/cycles, затем request и practice.
+Повторный GET / логин не вызывают Polza, если эти три слоя уже source=llm.
 GET только читает кэш. Браузер не дергает generate-эндпоинты: иначе 401,
 гонки сохранения и пять вызовов Polza подряд.
 """
@@ -13,8 +14,9 @@ import logging
 import os
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from django.db import DatabaseError, close_old_connections
 from django.utils.dateparse import parse_datetime
@@ -25,6 +27,7 @@ from core.services import llm_client
 logger = logging.getLogger(__name__)
 
 LAYERS = ("natal", "aspects", "cycles", "request", "practice")
+CORE_LAYERS = ("natal", "aspects", "cycles")
 STALE_RUNNING = timedelta(minutes=20)
 
 _schedule_guard = threading.Lock()
@@ -47,6 +50,16 @@ def layers_need_llm(order: Order) -> bool:
     return False
 
 
+def core_layers_ready(order: Order) -> bool:
+    """Карта, аспекты и циклы уже sealed — новый Polza-job не нужен."""
+    store = order.interpretive if isinstance(order.interpretive, dict) else {}
+    for key in CORE_LAYERS:
+        layer = store.get(key)
+        if not isinstance(layer, dict) or layer.get("source") != "llm":
+            return False
+    return True
+
+
 def _job_stale(job: dict[str, Any]) -> bool:
     raw = str(job.get("started_at") or "")
     started = parse_datetime(raw) if raw else None
@@ -64,12 +77,18 @@ def should_start_generation(order: Order, *, retry_failed: bool = False) -> bool
         return False
     if not layers_need_llm(order):
         return False
+    if core_layers_ready(order) and not retry_failed:
+        return False
     store = order.interpretive if isinstance(order.interpretive, dict) else {}
     job = store.get("generation")
     if isinstance(job, dict):
         status = str(job.get("status") or "")
         if status == "running" and not _job_stale(job):
-            return False
+            # Live thread holds the job. After runserver reload the DB row stays
+            # "running" but _inflight_orders is empty — restart, or the cabinet
+            # polls a dead job until STALE_RUNNING (20 min).
+            if order.pk in _inflight_orders:
+                return False
         if status == "done" and not retry_failed:
             return False
     return True
@@ -183,7 +202,7 @@ def kickoff_paid_report_for_order(order: Order, *, retry_failed: bool = False) -
     schedule_paid_report_generation(order.pk, retry_failed=retry_failed)
 
 
-def kickoff_paid_report_for_user(user, *, retry_failed: bool = True) -> None:
+def kickoff_paid_report_for_user(user, *, retry_failed: bool = False) -> None:
     if user is None:
         return
     from django.db.models import Q
@@ -255,8 +274,49 @@ def _persist_section_crash(order: Order, section: str, exc: BaseException) -> bo
         return False
 
 
+def _run_one_section(order: Order, section: str, generate: Callable[..., Any]) -> bool:
+    """True = можно продолжать pipeline. False = общий fatal, хвост не запускать."""
+    mark_generation_status(order, "running", current_section=section)
+    try:
+        generate(order, force=False)
+    except Exception as exc:
+        logger.exception(
+            "Paid-report section %s raised for order %s; continuing remaining layers",
+            section,
+            order.pk,
+        )
+        if not _persist_section_crash(order, section, exc):
+            logger.error(
+                "Aborting remaining paid-report layers for order %s after fatal shared error on %s",
+                order.pk,
+                section,
+            )
+            return False
+    try:
+        order.refresh_from_db()
+    except Exception:
+        logger.exception(
+            "refresh_from_db failed for order %s after section %s; aborting remaining layers",
+            order.pk,
+            section,
+        )
+        return False
+    return True
+
+
+def _run_one_section_threaded(order_id: int, section: str, generate: Callable[..., Any]) -> bool:
+    close_old_connections()
+    try:
+        order = Order.objects.filter(pk=order_id).first()
+        if order is None or order.status != Order.Status.PAID:
+            return False
+        return _run_one_section(order, section, generate)
+    finally:
+        close_old_connections()
+
+
 def generate_missing_interpretive_layers(order: Order) -> None:
-    """Синхронно дособрать слои. Для фона и тестов с моком LLM."""
+    """Natal ∥ aspects ∥ cycles, затем request, затем practice. Повтор без force не зовёт LLM."""
     from core.services.report import (
         generate_aspects_section,
         generate_cycles_section,
@@ -265,42 +325,57 @@ def generate_missing_interpretive_layers(order: Order) -> None:
         generate_request_section,
     )
 
-    steps = (
+    core_steps = (
         ("natal", generate_natal_section),
         ("aspects", generate_aspects_section),
         ("cycles", generate_cycles_section),
+    )
+    tail_steps = (
         ("request", generate_request_section),
         ("practice", generate_practice_section),
     )
 
-    mark_generation_status(order, "running", current_section=steps[0][0])
+    mark_generation_status(order, "running", current_section="natal")
     try:
-        for section, generate in steps:
-            mark_generation_status(order, "running", current_section=section)
-            try:
-                generate(order, force=False)
-            except Exception as exc:
-                logger.exception(
-                    "Paid-report section %s raised for order %s; continuing remaining layers",
-                    section,
-                    order.pk,
-                )
-                if not _persist_section_crash(order, section, exc):
-                    logger.error(
-                        "Aborting remaining paid-report layers for order %s after fatal shared error on %s",
-                        order.pk,
-                        section,
-                    )
+        continue_tail = True
+        if _running_tests():
+            for section, generate in core_steps:
+                if not _run_one_section(order, section, generate):
+                    continue_tail = False
                     break
+        else:
+            abort_tail = False
+            with ThreadPoolExecutor(max_workers=3, thread_name_prefix=f"report-{order.pk}") as pool:
+                futures = {
+                    pool.submit(_run_one_section_threaded, order.pk, section, generate): section
+                    for section, generate in core_steps
+                }
+                for future in as_completed(futures):
+                    section = futures[future]
+                    try:
+                        ok = future.result()
+                    except Exception:
+                        logger.exception(
+                            "Paid-report parallel section %s failed for order %s",
+                            section,
+                            order.pk,
+                        )
+                        ok = False
+                    if not ok:
+                        abort_tail = True
+            continue_tail = not abort_tail
             try:
                 order.refresh_from_db()
             except Exception:
                 logger.exception(
-                    "refresh_from_db failed for order %s after section %s; aborting remaining layers",
+                    "refresh_from_db failed for order %s after core layers; aborting tail",
                     order.pk,
-                    section,
                 )
-                break
+                continue_tail = False
+        if continue_tail:
+            for section, generate in tail_steps:
+                if not _run_one_section(order, section, generate):
+                    break
     finally:
         try:
             order.refresh_from_db()
