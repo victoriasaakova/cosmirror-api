@@ -20,6 +20,17 @@ urlpatterns = [
     path("auth/dev-login/", views.AuthDevLoginView.as_view(), name="auth-dev-login"),
     path("me/dev-reset/", views.MeDevResetView.as_view(), name="me-dev-reset"),
     path("me/report/", views.MeReportView.as_view(), name="me-report"),
+    path("me/cabinet/", views.MeCabinetView.as_view(), name="me-cabinet"),
+    path(
+        "me/cabinet/locked-preview/<slug:section>/",
+        views.MeCabinetLockedPreviewView.as_view(),
+        name="me-cabinet-locked-preview",
+    ),
+    path(
+        "me/report/feedback/",
+        views.MeReportFeedbackView.as_view(),
+        name="me-report-feedback",
+    ),
     path(
         "me/report/natal/generate/",
         views.MeReportNatalGenerateView.as_view(),

@@ -22,6 +22,7 @@ from .models import (
     OnboardingSession,
     OnboardingStep,
     Order,
+    ReportSectionFeedback,
     UserInput,
     WaitlistLead,
 )
@@ -33,6 +34,8 @@ from .serializers import (
     OnboardingStepSerializer,
     OnboardingStepSubmitSerializer,
     OrderSerializer,
+    ReportSectionFeedbackSerializer,
+    ReportSectionFeedbackWriteSerializer,
     UserInputSerializer,
     UserSerializer,
     WaitlistLeadSerializer,
@@ -218,11 +221,15 @@ class YandexAuthStartView(APIView):
         else:
             session = OnboardingSession.objects.create()
         requested = (request.query_params.get("redirect_uri") or "").strip()
+        after = (request.query_params.get("after") or "").strip().lower()
         try:
             uri = resolve_redirect_uri(requested)
             url = build_authorize_url(session=session, requested_redirect=uri)
         except YandexOAuthError as exc:
             return Response({"detail": exc.detail}, status=exc.status)
+        if after == "account":
+            session.current_step_slug = "account"
+            session.save(update_fields=["current_step_slug", "updated_at"])
         return Response({"url": url, "redirect_uri": uri})
 
 
@@ -261,9 +268,9 @@ class AuthDevLoginView(APIView):
             return Response(status=status.HTTP_404_NOT_FOUND)
         raw = request.data if isinstance(request.data, dict) else {}
         persona = str(raw.get("persona") or "empty").strip().lower()
-        if persona not in {"empty", "report", "insight"}:
+        if persona not in {"empty", "report", "insight", "cabinet"}:
             return Response(
-                {"detail": "persona: empty, report или insight."},
+                {"detail": "persona: empty, report, insight или cabinet."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         user = get_or_create_dev_user()
@@ -278,6 +285,11 @@ class AuthDevLoginView(APIView):
             from core.services.dev_fixtures import seed_dev_insight_funnel
 
             session = seed_dev_insight_funnel(user)
+            session_token = str(session.token)
+        elif persona == "cabinet":
+            from core.services.dev_fixtures import seed_dev_free_cabinet
+
+            session = seed_dev_free_cabinet(user)
             session_token = str(session.token)
         auth_token = issue_auth_token(user)
         user_data = UserSerializer(user).data
@@ -318,7 +330,12 @@ class YandexAuthCallbackView(APIView):
             kickoff_paid_report_for_user(_user, retry_failed=False)
         dest = (
             f"{frontend}/account/"
-            if _has_paid_report(_user)
+            if _has_paid_report(_user) or (session.current_step_slug or "") in {
+                "account",
+                "insight",
+                "cosmoportrait",
+                "report",
+            }
             else f"{frontend}/onboarding/insight/"
         )
         return redirect(
@@ -791,6 +808,74 @@ class MeReportView(APIView):
             kickoff_paid_report_for_order(order, retry_failed=False)
             order.refresh_from_db()
         return Response(OrderSerializer(order).data)
+
+
+class MeCabinetView(APIView):
+    """Free natal cabinet for an authenticated user who has not paid yet."""
+
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
+
+    def get(self, request):
+        if _has_paid_report(request.user):
+            return Response({"access": "paid", "report": None, "locked_sections": []})
+        from core.services.cabinet import build_free_cabinet
+
+        payload = build_free_cabinet(request.user)
+        if payload is None:
+            return Response({"detail": "Нет карты."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(payload)
+
+
+class MeCabinetLockedPreviewView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
+
+    def get(self, request, section: str):
+        if _has_paid_report(request.user):
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        from core.services.locked_preview import locked_preview_payload
+
+        payload = locked_preview_payload(request.user, section)
+        if not payload:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response(payload)
+
+
+class MeReportFeedbackView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
+
+    def post(self, request):
+        order = _latest_order_for(request.user)
+        if order is None:
+            return Response({"detail": "Нет заказа."}, status=status.HTTP_404_NOT_FOUND)
+        if order.status != Order.Status.PAID:
+            return Response(
+                {"detail": "Фидбэк будет после оплаты."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        writer = ReportSectionFeedbackWriteSerializer(data=request.data)
+        writer.is_valid(raise_exception=True)
+        data = writer.validated_data
+        skipped = bool(data.get("comment_skipped"))
+        comment = "" if skipped else str(data.get("comment") or "")
+        defaults = {
+            "user": request.user,
+            "rating": data["rating"],
+        }
+        if skipped:
+            defaults["comment"] = ""
+            defaults["comment_skipped"] = True
+        elif "comment" in request.data:
+            defaults["comment"] = comment
+            defaults["comment_skipped"] = False
+        obj, _created = ReportSectionFeedback.objects.update_or_create(
+            order=order,
+            section=data["section"],
+            defaults=defaults,
+        )
+        return Response(ReportSectionFeedbackSerializer(obj).data)
 
 
 class MeReportNatalGenerateView(APIView):

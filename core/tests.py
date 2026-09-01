@@ -16,6 +16,7 @@ from core.models import (
     OnboardingStep,
     OnboardingStepAnswer,
     Order,
+    ReportSectionFeedback,
     WaitlistLead,
 )
 from core.services.prodamus import (
@@ -2931,6 +2932,12 @@ class PracticeFallbackCopyTests(TestCase):
         blob = json.dumps(payload, ensure_ascii=False)
         self.assertNotIn("Не всякое напряжение в теме", blob)
 
+        from core.services.report_practice import practice_blocks_from_payload
+
+        titles = [block["title"] for block in practice_blocks_from_payload(payload)]
+        self.assertNotIn("Твой вывод", titles)
+        self.assertFalse(any(block.get("kind") == "user_takeaway" for block in practice_blocks_from_payload(payload)))
+
     def test_practice_falls_back_to_generic_without_theme(self):
         from core.services.report_practice_fallback import fallback_practice_interpretation
 
@@ -3305,6 +3312,43 @@ class YandexAuthTests(TestCase):
         self.assertIn("/onboarding/insight/", response["Location"])
         self.assertIn("#auth=", response["Location"])
 
+    def test_start_after_account_sets_insight_step(self):
+        response = self.client.get(
+            "/api/auth/yandex/start/",
+            {"session_token": str(self.session.token), "after": "account"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.current_step_slug, "account")
+
+    @patch("core.services.yandex_oauth._get_json")
+    @patch("core.services.yandex_oauth._post_form")
+    def test_yandex_get_callback_redirects_to_account_after_insight(self, post_form, get_json):
+        from core.models import YandexOAuthState
+
+        self.session.current_step_slug = "account"
+        self.session.save(update_fields=["current_step_slug"])
+        YandexOAuthState.objects.create(
+            nonce="state-account",
+            session=self.session,
+            code_verifier="verifier",
+            redirect_uri="http://localhost:3000/onboarding/contacts",
+        )
+        post_form.return_value = {"access_token": "ya-token"}
+        get_json.return_value = {
+            "id": "77",
+            "login": "cabinet",
+            "default_email": "cabinet@yandex.ru",
+            "display_name": "Кабинет",
+        }
+        response = self.client.get(
+            "/api/auth/yandex/callback/",
+            {"code": "777", "state": "state-account"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/account/", response["Location"])
+        self.assertIn("#auth=", response["Location"])
+
     def test_expired_token_is_rejected_and_deleted(self):
         _user, key = _make_user()
         token = AuthToken.objects.get(key=key)
@@ -3442,6 +3486,35 @@ class YandexAuthTests(TestCase):
             HTTP_AUTHORIZATION=f"Bearer {data['token']}",
         )
         self.assertEqual(report.status_code, 404)
+
+    @override_settings(DEBUG=True)
+    def test_dev_login_seeds_free_cabinet(self):
+        response = self.client.post(
+            "/api/auth/dev-login/",
+            {"persona": "cabinet"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["token"])
+        self.assertFalse(data["user"]["has_paid_report"])
+        cabinet = self.client.get(
+            "/api/me/cabinet/",
+            HTTP_AUTHORIZATION=f"Bearer {data['token']}",
+        )
+        self.assertEqual(cabinet.status_code, 200, cabinet.content)
+        payload = cabinet.json()
+        self.assertEqual(payload["access"], "free")
+        self.assertEqual(
+            payload["locked_sections"],
+            ["natal", "aspects", "cycles", "request", "practice"],
+        )
+        self.assertTrue(payload["report"])
+        paid = self.client.get(
+            "/api/me/report/",
+            HTTP_AUTHORIZATION=f"Bearer {data['token']}",
+        )
+        self.assertEqual(paid.status_code, 404)
 
 
 def _fake_store_chart(chart):
@@ -3601,6 +3674,231 @@ class AccountCabinetTests(TestCase):
         self.assertFalse(AuthToken.objects.filter(key=key).exists())
         self.assertFalse(Order.objects.filter(idempotency_key="delete-me-1").exists())
         self.assertFalse(WaitlistLead.objects.filter(email="gone@yandex.ru").exists())
+
+
+class ReportSectionFeedbackApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user, self.auth_key = _make_user(email="fb@example.com", yandex_id="8808")
+        lead = WaitlistLead.objects.create(email="fb@example.com", user=self.user)
+        session = OnboardingSession.objects.create(waitlist_lead=lead, user=self.user)
+        self.order = Order.objects.create(
+            idempotency_key="feedback-key-0001",
+            idempotency_request_hash="a" * 64,
+            session=session,
+            waitlist_lead=lead,
+            user=self.user,
+            customer_email="fb@example.com",
+            product_sku="personal_report",
+            product_name="Персональный разбор Cosmirror",
+            amount=Decimal("777.00"),
+            status=Order.Status.PAID,
+        )
+
+    def _post(self, body, *, auth_key=None):
+        return self.client.post(
+            "/api/me/report/feedback/",
+            body,
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {auth_key or self.auth_key}",
+        )
+
+    def test_requires_auth(self):
+        response = self.client.post(
+            "/api/me/report/feedback/",
+            {"section": "natal", "rating": "about_me"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 401)
+
+    @patch("core.services.report_jobs.kickoff_paid_report_for_order")
+    def test_saves_rating_then_comment(self, _kickoff):
+        first = self._post({"section": "natal", "rating": "partial"})
+        self.assertEqual(first.status_code, 200, first.content)
+        self.assertEqual(first.json()["rating"], "partial")
+        self.assertEqual(first.json()["comment"], "")
+        self.assertFalse(first.json()["comment_skipped"])
+
+        second = self._post(
+            {
+                "section": "natal",
+                "rating": "partial",
+                "comment": "  Совпало про Луну.  ",
+            }
+        )
+        self.assertEqual(second.status_code, 200, second.content)
+        self.assertEqual(second.json()["comment"], "Совпало про Луну.")
+        self.assertFalse(second.json()["comment_skipped"])
+        self.assertEqual(ReportSectionFeedback.objects.filter(order=self.order).count(), 1)
+
+        report = self.client.get(
+            "/api/me/report/",
+            HTTP_AUTHORIZATION=f"Bearer {self.auth_key}",
+        )
+        self.assertEqual(report.status_code, 200)
+        rows = report.json()["section_feedback"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["section"], "natal")
+        self.assertEqual(rows[0]["rating"], "partial")
+        self.assertEqual(rows[0]["comment"], "Совпало про Луну.")
+
+    def test_skip_comment_clears_text(self):
+        self._post({"section": "cycles", "rating": "about_me", "comment": "уже не нужно"})
+        later = self._post(
+            {"section": "cycles", "rating": "about_me", "comment_skipped": True}
+        )
+        self.assertEqual(later.status_code, 200, later.content)
+        self.assertTrue(later.json()["comment_skipped"])
+        self.assertEqual(later.json()["comment"], "")
+
+    def test_rejects_unknown_section(self):
+        response = self._post({"section": "home", "rating": "about_me"})
+        self.assertEqual(response.status_code, 400)
+
+    def test_unpaid_order_is_forbidden(self):
+        self.order.status = Order.Status.AWAITING_PAYMENT
+        self.order.save(update_fields=["status"])
+        response = self._post({"section": "practice", "rating": "not_about_me"})
+        self.assertEqual(response.status_code, 403)
+
+
+def _free_cabinet_natal():
+    return {
+        "engine": "test",
+        "has_birth_time": True,
+        "planets": {
+            "sun": {"sign": "leo", "sign_ru": "Лев", "degree": 28.1, "sign_index": 4, "house": 10},
+            "moon": {
+                "sign": "capricorn",
+                "sign_ru": "Козерог",
+                "degree": 12.0,
+                "sign_index": 9,
+                "house": 3,
+            },
+            "mercury": {
+                "sign": "virgo",
+                "sign_ru": "Дева",
+                "degree": 4.0,
+                "sign_index": 5,
+                "house": 11,
+            },
+            "venus": {
+                "sign": "cancer",
+                "sign_ru": "Рак",
+                "degree": 18.0,
+                "sign_index": 3,
+                "house": 9,
+            },
+            "mars": {
+                "sign": "aries",
+                "sign_ru": "Овен",
+                "degree": 2.0,
+                "sign_index": 0,
+                "house": 6,
+            },
+            "saturn": {
+                "sign": "aquarius",
+                "sign_ru": "Водолей",
+                "degree": 9.0,
+                "sign_index": 10,
+                "house": 4,
+            },
+        },
+        "ascendant": {"sign": "scorpio", "sign_ru": "Скорпион", "degree": 5.0, "sign_index": 7},
+        "houses": [{"house": i + 1, "sign": "scorpio", "sign_ru": "Скорпион"} for i in range(12)],
+    }
+
+
+class FreeCabinetTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user, self.auth_key = _make_user(email="cabinet@example.com", yandex_id="8801")
+        session = OnboardingSession.objects.create(
+            user=self.user,
+            birth_date=date(1993, 8, 21),
+            birth_time=time(9, 45),
+            birth_place="Москва",
+        )
+        NatalChart.objects.create(
+            session=session,
+            user=self.user,
+            birth_date=date(1993, 8, 21),
+            birth_time=time(9, 45),
+            birth_place="Москва",
+            status=NatalChart.Status.READY,
+            chart_data=_free_cabinet_natal(),
+        )
+        self.auth = f"Bearer {self.auth_key}"
+
+    def test_cabinet_returns_natal_without_paid_layers(self):
+        response = self.client.get("/api/me/cabinet/", HTTP_AUTHORIZATION=self.auth)
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        self.assertEqual(payload["access"], "free")
+        self.assertEqual(payload["locked_sections"], ["natal", "aspects", "cycles", "request", "practice"])
+        document = payload["report"]["document"]
+        interpretive = document["interpretive"]
+        self.assertNotIn("natal", interpretive)
+        self.assertNotIn("aspects", interpretive)
+        self.assertNotIn("cycles", interpretive)
+        self.assertNotIn("request", interpretive)
+        self.assertNotIn("practice", interpretive)
+        self.assertNotIn("generation", document)
+        self.assertNotIn("generation", interpretive)
+        self.assertNotIn("transits", document.get("factual") or {})
+        natal_facts = (document.get("factual") or {}).get("natal") or {}
+        self.assertNotIn("aspects", natal_facts)
+        self.assertTrue(natal_facts.get("points") or natal_facts.get("wheel"))
+
+    def test_unpaid_cabinet_has_no_paid_report_endpoint(self):
+        report = self.client.get("/api/me/report/", HTTP_AUTHORIZATION=self.auth)
+        self.assertEqual(report.status_code, 404)
+
+    def test_locked_preview_returns_cards(self):
+        response = self.client.get(
+            "/api/me/cabinet/locked-preview/aspects/",
+            HTTP_AUTHORIZATION=self.auth,
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        self.assertEqual(payload["section"], "aspects")
+        self.assertTrue(payload["cards"])
+        self.assertIn("Лев", payload["cards"][0]["text"])
+        self.assertEqual(payload["cards"][0]["title"], "Связи внутри карты")
+
+    def test_locked_preview_natal_is_available(self):
+        response = self.client.get(
+            "/api/me/cabinet/locked-preview/natal/",
+            HTTP_AUTHORIZATION=self.auth,
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        self.assertEqual(payload["section"], "natal")
+        self.assertTrue(payload["cards"])
+        self.assertEqual(payload["cards"][0]["title"], "Солнце и Луна")
+
+    def test_paid_user_cabinet_is_marked_paid(self):
+        session = OnboardingSession.objects.filter(user=self.user).first()
+        Order.objects.create(
+            idempotency_key="cabinet-paid-1",
+            idempotency_request_hash="e" * 64,
+            session=session,
+            user=self.user,
+            customer_email="cabinet@example.com",
+            product_sku="personal_report",
+            product_name="Персональный разбор Cosmirror",
+            amount=Decimal("777.00"),
+            status=Order.Status.PAID,
+        )
+        response = self.client.get("/api/me/cabinet/", HTTP_AUTHORIZATION=self.auth)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["access"], "paid")
+        preview = self.client.get(
+            "/api/me/cabinet/locked-preview/cycles/",
+            HTTP_AUTHORIZATION=self.auth,
+        )
+        self.assertEqual(preview.status_code, 404)
+
 
 
 

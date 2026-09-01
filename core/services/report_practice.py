@@ -190,15 +190,6 @@ def practice_blocks_from_payload(payload: dict[str, Any]) -> list[dict[str, str]
                 "kind": "observe",
             }
         )
-    prompt = str(payload.get("user_takeaway_prompt") or "").strip()
-    if prompt:
-        blocks.append(
-            {
-                "title": "Твой вывод",
-                "text": prompt,
-                "kind": "user_takeaway",
-            }
-        )
     return blocks
 
 

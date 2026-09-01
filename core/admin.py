@@ -11,6 +11,7 @@ from .models import (
     OnboardingStepAnswer,
     Order,
     Profile,
+    ReportSectionFeedback,
     UserInput,
     WaitlistLead,
 )
@@ -157,6 +158,44 @@ class GlobalPlanetaryCycleAdmin(admin.ModelAdmin):
     prepopulated_fields = {"key": ("title",)}
 
 
+class ReportSectionFeedbackInline(admin.TabularInline):
+    model = ReportSectionFeedback
+    extra = 0
+    fields = ("section", "rating", "comment", "comment_skipped", "updated_at")
+    readonly_fields = ("updated_at",)
+    show_change_link = True
+
+
+@admin.register(ReportSectionFeedback)
+class ReportSectionFeedbackAdmin(admin.ModelAdmin):
+    list_display = (
+        "order",
+        "user",
+        "section",
+        "rating",
+        "comment_skipped",
+        "short_comment",
+        "updated_at",
+    )
+    list_filter = ("section", "rating", "comment_skipped", "created_at")
+    search_fields = (
+        "comment",
+        "order__public_id",
+        "order__customer_email",
+        "user__username",
+        "user__email",
+    )
+    readonly_fields = ("created_at", "updated_at")
+    list_select_related = ("order", "user")
+
+    @admin.display(description="Комментарий")
+    def short_comment(self, obj: ReportSectionFeedback) -> str:
+        text = (obj.comment or "").strip()
+        if not text:
+            return "—"
+        return text if len(text) <= 80 else f"{text[:77]}…"
+
+
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
     list_display = (
@@ -194,6 +233,7 @@ class OrderAdmin(admin.ModelAdmin):
         "fulfilled_at",
         "fulfillment_error",
     )
+    inlines = (ReportSectionFeedbackInline,)
     actions = ("send_demo_report",)
 
     @admin.action(description="Отметить оплаченным и отправить демо-отчёт")

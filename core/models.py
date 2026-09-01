@@ -525,3 +525,52 @@ class YandexOAuthState(models.Model):
 
     def __str__(self) -> str:
         return self.nonce
+
+
+class ReportSectionFeedback(models.Model):
+    """Оценка точности раздела платного отчёта: «насколько это про тебя»."""
+
+    class Section(models.TextChoices):
+        NATAL = "natal", "Твоя карта"
+        ASPECTS = "aspects", "Аспекты"
+        CYCLES = "cycles", "Циклы"
+        REQUEST = "request", "Запрос"
+        PRACTICE = "practice", "Практика"
+
+    class Rating(models.TextChoices):
+        ABOUT_ME = "about_me", "Про меня"
+        PARTIAL = "partial", "Частично"
+        NOT_ABOUT_ME = "not_about_me", "Не про меня"
+
+    order = models.ForeignKey(
+        Order,
+        on_delete=models.CASCADE,
+        related_name="section_feedback",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="report_section_feedback",
+    )
+    section = models.CharField("Раздел", max_length=16, choices=Section.choices)
+    rating = models.CharField("Оценка", max_length=16, choices=Rating.choices)
+    comment = models.TextField("Комментарий", blank=True)
+    comment_skipped = models.BooleanField("Комментарий отложен", default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Фидбэк по разделу отчёта"
+        verbose_name_plural = "Фидбэк по разделам отчёта"
+        ordering = ["-updated_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["order", "section"],
+                name="uniq_report_section_feedback",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.order_id}:{self.section} ({self.rating})"

@@ -55,6 +55,15 @@ def seed_dev_paid_report(user) -> Order:
     return _create_paid_order(user, session, lead)
 
 
+def seed_dev_free_cabinet(user) -> OnboardingSession:
+    """Натал есть, заказа нет: бесплатный кабинет с замками."""
+    session = _seed_dev_session(user, completed=True)
+    if session.current_step_slug != "account":
+        session.current_step_slug = "account"
+        session.save(update_fields=["current_step_slug", "updated_at"])
+    return session
+
+
 def seed_dev_insight_funnel(user) -> OnboardingSession:
     """Квиз и карта готовы, заказа нет: сразу инсайт → оферта → оплата."""
     return _seed_dev_session(user, completed=False)

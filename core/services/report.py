@@ -297,30 +297,25 @@ def _subtitle(document: dict[str, Any], natal: dict[str, Any]) -> str:
     return f"Тропическая карта · {house}: положения, циклы и твой запрос."
 
 
-def _stored_natal(order: Order) -> dict[str, Any]:
-    chart = NatalChart.objects.filter(session=order.session).first()
+def natal_from_session(session) -> dict[str, Any]:
+    """Натал по сессии онбординга — с заказом или без."""
+    if session is None:
+        return {}
+    chart = NatalChart.objects.filter(session=session).first()
+    stored: dict[str, Any] = {}
     if chart and isinstance(chart.chart_data, dict) and chart.chart_data.get("planets"):
-        data = dict(chart.chart_data)
-        data.setdefault("location", {})
-        if chart.birth_place and not data["location"].get("place"):
-            data["location"]["place"] = chart.birth_place
-        return data
-    return {}
-
-
-def _natal_for(order: Order) -> dict[str, Any]:
-    """Пересчитываем Плацидус из данных рождения, чтобы старые whole-sign карты не залипали."""
-    stored = _stored_natal(order)
-    session = order.session
+        stored = dict(chart.chart_data)
+        stored.setdefault("location", {})
+        if chart.birth_place and not stored["location"].get("place"):
+            stored["location"]["place"] = chart.birth_place
     loc = stored.get("location") if isinstance(stored.get("location"), dict) else {}
-    chart = NatalChart.objects.filter(session=order.session).first() if session else None
 
-    birth_date = session.birth_date if session else None
-    birth_time = session.birth_time if session else None
-    place = (session.birth_place if session else "") or loc.get("place") or ""
-    tz_name = (session.timezone if session else "") or stored.get("timezone") or ""
-    lat = (session.birth_lat if session else None) or loc.get("lat")
-    lng = (session.birth_lng if session else None) or loc.get("lng")
+    birth_date = session.birth_date
+    birth_time = session.birth_time
+    place = session.birth_place or loc.get("place") or ""
+    tz_name = session.timezone or stored.get("timezone") or ""
+    lat = session.birth_lat if session.birth_lat is not None else loc.get("lat")
+    lng = session.birth_lng if session.birth_lng is not None else loc.get("lng")
     if chart:
         birth_date = birth_date or chart.birth_date
         birth_time = birth_time or chart.birth_time
@@ -342,7 +337,7 @@ def _natal_for(order: Order) -> dict[str, Any]:
             pass
     if stored:
         return stored
-    if session and session.birth_date:
+    if session.birth_date:
         from core.services.onboarding_astro import build_chart_and_insight
 
         try:
@@ -358,6 +353,37 @@ def _natal_for(order: Order) -> dict[str, Any]:
         except Exception:
             return {}
     return {}
+
+
+def natal_from_user(user) -> dict[str, Any]:
+    from core.models import OnboardingSession
+
+    session = (
+        OnboardingSession.objects.filter(user=user, birth_date__isnull=False)
+        .order_by("-updated_at")
+        .first()
+    )
+    if session:
+        natal = natal_from_session(session)
+        if natal.get("planets"):
+            return natal
+    chart = NatalChart.objects.filter(user=user).order_by("-id").first()
+    if chart and chart.session_id:
+        natal = natal_from_session(chart.session)
+        if natal.get("planets"):
+            return natal
+    if chart and isinstance(chart.chart_data, dict) and chart.chart_data.get("planets"):
+        return dict(chart.chart_data)
+    return {}
+
+
+def _stored_natal(order: Order) -> dict[str, Any]:
+    return natal_from_session(order.session) if order.session else {}
+
+
+def _natal_for(order: Order) -> dict[str, Any]:
+    """Пересчитываем Плацидус из данных рождения, чтобы старые whole-sign карты не залипали."""
+    return natal_from_session(order.session)
 
 
 def _person_block(order: Order, natal: dict[str, Any]) -> dict[str, Any]:

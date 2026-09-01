@@ -15,6 +15,7 @@ from .models import (
     OnboardingStepAnswer,
     Order,
     Profile,
+    ReportSectionFeedback,
     UserInput,
     WaitlistLead,
 )
@@ -434,10 +435,34 @@ class GlobalPlanetaryCycleSerializer(serializers.ModelSerializer):
         )
 
 
+class ReportSectionFeedbackSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ReportSectionFeedback
+        fields = (
+            "section",
+            "rating",
+            "comment",
+            "comment_skipped",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+
+class ReportSectionFeedbackWriteSerializer(serializers.Serializer):
+    section = serializers.ChoiceField(choices=ReportSectionFeedback.Section.choices)
+    rating = serializers.ChoiceField(choices=ReportSectionFeedback.Rating.choices)
+    comment = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    comment_skipped = serializers.BooleanField(required=False, default=False)
+
+    def validate_comment(self, value: str) -> str:
+        return (value or "").strip()
+
+
 class OrderSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(source="public_id", read_only=True)
     report = serializers.SerializerMethodField()
     report_pdf_url = serializers.SerializerMethodField()
+    section_feedback = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -454,6 +479,7 @@ class OrderSerializer(serializers.ModelSerializer):
             "fulfillment_error",
             "report",
             "report_pdf_url",
+            "section_feedback",
             "created_at",
             "updated_at",
         )
@@ -488,3 +514,11 @@ class OrderSerializer(serializers.ModelSerializer):
         if order.status != Order.Status.PAID:
             return ""
         return "/api/me/report.pdf/"
+
+    def get_section_feedback(self, order: Order):
+        if order.status != Order.Status.PAID:
+            return []
+        rows = getattr(order, "_prefetched_objects_cache", {}).get("section_feedback")
+        if rows is None:
+            rows = order.section_feedback.all()
+        return ReportSectionFeedbackSerializer(rows, many=True).data
