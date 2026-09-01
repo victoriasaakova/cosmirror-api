@@ -10,7 +10,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.services.report_lexicon import ASPECT_THEME, HOUSE_ARENA, PLANET_THEME
+from core.services.report_lexicon import (
+    ASPECT_THEME,
+    HOUSE_ARENA,
+    PLANET_THEME,
+    as_sentence,
+    duration_span_sentence,
+)
 from core.services.report_types import PLANET_RU, POLARITY_PRESSURE, POLARITY_RESOURCE
 
 EMPTY_SKILL_FIELDS = {
@@ -127,7 +133,7 @@ def observation_question(transit: str, natal: str, aspect: str, t_name: str, n_n
 def timing_text_for(hit: dict[str, Any]) -> str:
     window = hit.get("window") if isinstance(hit.get("window"), dict) else {}
     parts: list[str] = []
-    span = str(window.get("span_note") or "").strip()
+    span = duration_span_sentence(str(window.get("span_note") or ""))
     if span:
         parts.append(span)
     peak = window.get("peak_estimate")
@@ -135,7 +141,7 @@ def timing_text_for(hit: dict[str, Any]) -> str:
         parts.append(f"Оценка пика по орбу: {peak}.")
     phase = PHASE_RU.get(str(hit.get("motion") or ""), "")
     if phase:
-        parts.append(f"Фаза: {phase}.")
+        parts.append(as_sentence(f"Фаза: {phase}"))
     return " ".join(parts).strip()
 
 
@@ -166,9 +172,6 @@ def compose_fallback_cycle_summary(hit: dict[str, Any]) -> str:
     house = hit.get("natal_house")
     if isinstance(house, int) and house in HOUSE_ARENA:
         sentences.append(f"Тема может быть заметнее {HOUSE_ARENA[house]}.")
-    timing = timing_text_for(hit)
-    if timing:
-        sentences.append(timing)
     sentences.append(
         "Это полезнее воспринимать как временную тему для наблюдения, "
         "а не как описание большого жизненного периода."

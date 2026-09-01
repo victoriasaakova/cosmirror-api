@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="cosmirror-report.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover__top">
+    <img class="cover__eye" src="eye.png" alt="">
+    <div class="cover__brand">Cosmirror</div>
+    <div class="cover__subtitle">{{ title }}</div>
+    <div class="cover__person">
+      {% if name %}<div class="cover__name">{{ name }}</div>{% endif %}
+      <div class="cover__birth">
+        {% if birth_date %}<span>{{ birth_date }}</span>{% endif %}
+        {% if birth_time %}<span>{{ birth_time }}</span>{% endif %}
+        {% if birth_place %}<span>{{ birth_place }}</span>{% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="cover__art">
+    <img src="cover.webp" alt="">
+    <div class="cover__fade"></div>
+  </div>
+</section>
+
+{% macro divider(anchor, title) %}
+<section class="divider" id="{{ anchor }}">
+  <div class="divider__top">
+    <img class="divider__eye" src="eye.png" alt="">
+    <div class="divider__title">{{ title }}</div>
+  </div>
+  <div class="divider__art">
+    <img src="chapter.webp" alt="">
+    <div class="divider__fade"></div>
+  </div>
+</section>
+{% endmacro %}
+
+{% macro theme_block(theme) %}
+  {% if theme.headline %}<h2>{{ theme.headline }}</h2>{% endif %}
+  {% if theme.narrative %}<p>{{ theme.narrative }}</p>{% endif %}
+  {% if theme.question %}<div class="ask">{{ theme.question }}</div>{% endif %}
+{% endmacro %}
+
+{% macro glyphrow(marks, label="почему мы это видим") %}
+  {% if marks %}
+  <div class="glyphrow">
+    <span class="glyphrow__label">{{ label }}</span>
+    {% for mark in marks %}
+    <span><span class="gpair {{ mark.class }}">{{ mark.glyphs }}</span> {{ mark.label }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+{% endmacro %}
+
+{% macro paircap(pair) %}
+  {% if pair %}
+  <p class="paircap"><span class="gpair {{ pair.class }}">{{ pair.glyphs }}</span>{{ pair.label }}</p>
+  {% endif %}
+{% endmacro %}
+
+{% macro pcard(card) %}
+<div class="pcard">
+  <div class="pcard__head">
+    {% if card.glyphs %}<div class="pcard__glyphs">{{ card.glyphs }}</div>{% endif %}
+    <div class="pcard__title">{{ card.title }}</div>
+    {% if card.house %}<div class="pcard__house">{{ card.house }}</div>{% endif %}
+  </div>
+  {% if card.headline %}<div class="pcard__headline">{{ card.headline }}</div>{% endif %}
+  {% for paragraph in card.paragraphs %}<p>{{ paragraph }}</p>{% endfor %}
+  {% if card.house_modifier %}<div class="mod">{{ card.house_modifier }}</div>{% endif %}
+  {% if card.why %}<div class="astro">{{ card.why }}</div>{% endif %}
+  {% if card.question %}
+  <div class="zone">
+    <div class="zone__label">зона для исследования</div>
+    <div class="ask">{{ card.question }}</div>
+  </div>
+  {% endif %}
+  {{ glyphrow(card.marks) }}
+</div>
+{% endmacro %}
+
+{{ divider("ch-natal", "Твоя карта") }}
+<section class="chapter chapter--after-divider">
+  <div class="trio">
+    {% for item in trio %}
+    <div class="trio__item">
+      <div class="trio__glyphs">{{ item.glyphs }}</div>
+      <div class="trio__name">{{ item.name }}</div>
+      <div class="trio__sign">{{ item.sign }}</div>
+      {% if item.dms %}<div class="trio__dms">{{ item.dms }}</div>{% endif %}
+      {% if item.fact %}<div class="trio__fact">{{ item.fact }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if wheel_svg %}
+  <div class="wheel">
+    {{ wheel_svg|safe }}
+    <div class="legend">
+      <span><i class="l-hard"></i>напряжение — квадрат, оппозиция</span>
+      <span><i class="l-soft"></i>поддержка — тригон, секстиль</span>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if positions %}
+  <h3>Положения</h3>
+  <table class="positions">
+    <colgroup>
+      <col class="c-g"><col class="c-name"><col class="c-sign"><col class="c-dms"><col class="c-house">
+    </colgroup>
+    <thead><tr><th>&nbsp;</th><th>планета</th><th>знак</th><th>градус</th><th>дом</th></tr></thead>
+    <tbody>
+      {% for row in positions %}
+      <tr>
+        <td class="g">{{ row.glyph }}</td>
+        <td class="name">{{ row.name }}{% if row.retro %} <span class="retro">℞</span>{% endif %}</td>
+        <td class="sign">{{ row.sign }}</td>
+        <td class="dms">{{ row.dms }}</td>
+        <td class="house">{{ row.house }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% for theme in natal.portrait_themes %}{{ theme_block(theme) }}{% endfor %}
+  {% if natal.portrait_headline %}<h2>{{ natal.portrait_headline }}</h2>{% endif %}
+  {% if natal.portrait_summary %}<p class="lede">{{ natal.portrait_summary }}</p>{% endif %}
+
+  {% for group in natal.groups %}
+  <h2 class="group">{{ group.title }}</h2>
+  {% for card in group.cards %}{{ pcard(card) }}{% endfor %}
+  {% endfor %}
+
+  {% for group in natal.extra_groups %}
+  <h2 class="group">{{ group.title }}</h2>
+  {% for card in group.cards %}{{ pcard(card) }}{% endfor %}
+  {% endfor %}
+
+  {% if natal.repeating_themes %}
+  <h2 class="group">Что повторяется</h2>
+  {% for theme in natal.repeating_themes %}{{ theme_block(theme) }}{% endfor %}
+  {% endif %}
+
+  {% if natal.questions %}
+  <h2 class="group">Для наблюдения</h2>
+  {% for question in natal.questions %}<div class="ask">{{ question }}</div>{% endfor %}
+  {% endif %}
+
+  {% if natal.limitations %}<p class="lede">{{ natal.limitations }}</p>{% endif %}
+
+  {% if natal.houses %}
+  <h2 class="group">Где это может проявляться</h2>
+  <div class="hgrid">
+    {% for house in natal.houses %}
+    <div class="hcell">
+      <div class="hcell__head">
+        <span class="hcell__num">{{ house.number }}</span>
+        {% if house.glyph %}<span class="hcell__glyph">{{ house.glyph }}</span>{% endif %}
+        <span class="hcell__sign">{{ house.sign }}</span>
+      </div>
+      <div class="hcell__theme">{{ house.theme }}{% if house.in %}<span class="hcell__in">{{ house.in }}</span>{% endif %}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+{{ divider("ch-aspects", "Аспекты") }}
+<section class="chapter chapter--after-divider">
+  {% if aspects.headline %}<h2>{{ aspects.headline }}</h2>{% endif %}
+  <p class="lede">{{ aspects.summary }}</p>
+  {% if aspects.themes %}
+  <h2 class="group">Что повторяется</h2>
+  {% for theme in aspects.themes %}{{ theme_block(theme) }}{% endfor %}
+  {% endif %}
+  {% for card in aspects.cards %}
+  <div class="acard">
+    <div class="acard__meta">
+      {% if card.tag %}<span class="tag tag--{{ card.tag_class }}">{{ card.tag }}</span>{% endif %}
+      {% if card.orb %}<span class="acard__orb">{{ card.orb }}</span>{% endif %}
+    </div>
+    {% if card.pair %}<div class="acard__pair">{{ card.pair }}</div>{% endif %}
+    <div class="acard__name">{{ card.name }}</div>
+    {% if card.headline %}<div class="acard__headline">{{ card.headline }}</div>{% endif %}
+    {% for paragraph in card.lead if paragraph %}<p>{{ paragraph }}</p>{% endfor %}
+    {% if card.manifestations %}
+    <h3>Как это может проявляться</h3>
+    <ul class="shows">{% for item in card.manifestations %}<li>{{ item }}</li>{% endfor %}</ul>
+    {% endif %}
+    {% if card.resource %}<div class="facet facet--resource"><div class="facet__label">ресурс</div><p>{{ card.resource }}</p></div>{% endif %}
+    {% if card.tension %}<div class="facet facet--tension"><div class="facet__label">напряжение</div><p>{{ card.tension }}</p></div>{% endif %}
+    {% if card.work %}<div class="facet facet--work"><div class="facet__label">как с этим работать</div><p>{{ card.work }}</p></div>{% endif %}
+    {% if card.questions %}
+    <div class="zone">
+      <div class="zone__label">зона для исследования</div>
+      {% for question in card.questions %}<div class="ask">{{ question }}</div>{% endfor %}
+    </div>
+    {% endif %}
+    {% if card.astro %}<div class="astro">{{ card.astro }}</div>{% endif %}
+    {{ glyphrow([{"class": card.tag_class, "glyphs": card.pair, "label": card.why_label}]) }}
+  </div>
+  {% endfor %}
+  {% if aspects.empty %}<p class="lede">В этом срезе тесных натальных аспектов нет.</p>{% endif %}
+</section>
+
+{{ divider("ch-cycles", "Циклы") }}
+<section class="chapter chapter--after-divider">
+  {% if cycles.headline %}<h2>{{ cycles.headline }}</h2>{% endif %}
+  <p class="lede">{{ cycles.summary }}</p>
+  {% if cycles.degraded %}
+  <p class="lede">Показан расчётный слой: какие циклы активны сейчас. Подробная интерпретация появится после генерации.</p>
+  {% endif %}
+  {% for card in cycles.cards %}
+  <div class="acard">
+    <div class="acard__meta">
+      {% if card.tag %}<span class="tag tag--{{ card.tag_class }}">{{ card.tag }}</span>{% endif %}
+      {% if card.orb %}<span class="acard__orb">{{ card.orb }}</span>{% endif %}
+      {% if card.phase %}<span class="acard__orb">{{ card.phase }}</span>{% endif %}
+    </div>
+    {% if card.pair %}<div class="acard__pair">{{ card.pair }}</div>{% endif %}
+    <div class="acard__name">{{ card.name }}</div>
+    {% if card.headline %}<div class="acard__headline">{{ card.headline }}</div>{% endif %}
+    {% if card.window %}<p class="lede">{{ card.window }}</p>{% endif %}
+    {% if card.compact %}
+      {% if card.explanation %}<p>{{ card.explanation }}</p>{% endif %}
+      {% if card.manifestations %}
+      <h3>Как это может проявляться</h3>
+      <ul class="shows">{% for item in card.manifestations %}<li>{{ item }}</li>{% endfor %}</ul>
+      {% endif %}
+      {% if card.fallback_question %}
+      <div class="zone">
+        <div class="zone__label">Для наблюдения</div>
+        <div class="ask">{{ card.fallback_question }}</div>
+      </div>
+      {% endif %}
+    {% else %}
+      {% for paragraph in card.lead if paragraph %}<p>{{ paragraph }}</p>{% endfor %}
+      {% if card.manifestations %}
+      <h3>Как это может проявляться</h3>
+      <ul class="shows">{% for item in card.manifestations %}<li>{{ item }}</li>{% endfor %}</ul>
+      {% endif %}
+      {% for paragraph in card.rest %}<p>{{ paragraph }}</p>{% endfor %}
+      {% if card.questions %}
+      <div class="zone">
+        <div class="zone__label">зона для исследования</div>
+        {% for question in card.questions %}<div class="ask">{{ question }}</div>{% endfor %}
+      </div>
+      {% endif %}
+      {% if card.astro %}<div class="astro">{{ card.astro }}</div>{% endif %}
+    {% endif %}
+    {{ glyphrow([{"class": card.tag_class, "glyphs": card.pair, "label": card.why_label}]) }}
+  </div>
+  {% endfor %}
+  {% if cycles.empty %}<p class="lede">В текущем орбе нет персональных попаданий.</p>{% endif %}
+  {% if cycles.synthesis %}
+  <div class="story">
+    <div class="story__title">{{ cycles.synthesis_headline }}</div>
+    <p>{{ cycles.synthesis }}</p>
+    {% if cycles.synthesis_questions %}
+    <div class="zone">
+      <div class="zone__label">зона для исследования</div>
+      {% for question in cycles.synthesis_questions %}<div class="ask">{{ question }}</div>{% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+
+{{ divider("ch-request", "Запрос") }}
+<section class="chapter chapter--after-divider">
+  {% if request.empty %}
+  <p class="lede">запрос появится, когда слой соберётся.</p>
+  {% endif %}
+  {% for block in request.fallback_blocks %}
+  <div class="story">
+    {% if block.title %}<div class="story__title">{{ block.title }}</div>{% endif %}
+    {% if block.text %}<p>{{ block.text }}</p>{% endif %}
+  </div>
+  {% endfor %}
+  {% if request.request_title or request.request_text %}
+  <div class="story">
+    {% if request.request_title %}<div class="story__title">{{ request.request_title }}</div>{% endif %}
+    {% if request.request_text %}<p>{{ request.request_text }}</p>{% endif %}
+  </div>
+  {% endif %}
+  {% for row in request.connections %}
+  <div class="story">
+    {% if row.title %}<div class="story__title">{{ row.title }}</div>{% endif %}
+    {{ paircap(row.pair) }}
+    {% if row.text %}<p>{{ row.text }}</p>{% endif %}
+  </div>
+  {% endfor %}
+  {% if request.distinction_text %}
+  <div class="story">
+    <div class="story__title">{{ request.distinction_title }}</div>
+    {% for pair in request.distinction_pairs %}{{ paircap(pair) }}{% endfor %}
+    <p>{{ request.distinction_text }}</p>
+  </div>
+  {% endif %}
+  {% if request.resource_text or request.resource_title %}
+  <div class="story">
+    <div class="story__title">{{ request.resource_title }}</div>
+    {{ paircap(request.resource_pair) }}
+    {% if request.resource_text %}<p>{{ request.resource_text }}</p>{% endif %}
+  </div>
+  {% endif %}
+  {% if request.takeaway %}
+  <div class="story">
+    <div class="story__title">Главное</div>
+    <p>{{ request.takeaway }}</p>
+  </div>
+  {% endif %}
+</section>
+
+{{ divider("ch-practice", "Практика") }}
+<section class="chapter chapter--after-divider">
+  {% if practice.empty %}
+  <p class="lede">практика появится, когда слой соберётся.</p>
+  {% endif %}
+  {% for block in practice.fallback_blocks %}
+  <div class="story">
+    {% if block.title %}<div class="story__title">{{ block.title }}</div>{% endif %}
+    {% if block.text %}<p>{{ block.text }}</p>{% endif %}
+  </div>
+  {% endfor %}
+  {% if practice.start_headline or practice.start_text %}
+  <div class="practice">
+    {% if practice.start_headline %}<div class="practice__label">{{ practice.start_headline }}</div>{% endif %}
+    {% for pair in practice.start_pairs %}{{ paircap(pair) }}{% endfor %}
+    {% if practice.start_text %}<p>{{ practice.start_text }}</p>{% endif %}
+  </div>
+  {% endif %}
+  {% if practice.pattern_title or practice.pattern_text %}
+  <div class="story">
+    {% if practice.pattern_title %}<div class="story__title">{{ practice.pattern_title }}</div>{% endif %}
+    {% for pair in practice.pattern_pairs %}{{ paircap(pair) }}{% endfor %}
+    {% if practice.pattern_text %}<p>{{ practice.pattern_text }}</p>{% endif %}
+  </div>
+  {% endif %}
+  {% for row in practice.extras %}
+  <div class="story">
+    {% if row.title %}<div class="story__title">{{ row.title }}</div>{% endif %}
+    {% if row.text %}<p>{{ row.text }}</p>{% endif %}
+  </div>
+  {% endfor %}
+  {% if practice.distinctions %}
+  <div class="distinct">
+    <h2 class="group">Что важно различить</h2>
+    {% for row in practice.distinctions %}
+    <dt>{{ row.pair }}</dt>
+    {% if row.note %}<dd>{{ row.note }}</dd>{% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if practice.questions %}
+  <div class="zone">
+    <div class="zone__label">Вопросы для самостоятельной работы</div>
+    {% for question in practice.questions %}<div class="ask">{{ question }}</div>{% endfor %}
+  </div>
+  {% endif %}
+  {% if practice.experiment_text or practice.experiment_title %}
+  <div class="practice">
+    <div class="practice__label">{{ practice.experiment_title }}</div>
+    {% if practice.experiment_text %}<p>{{ practice.experiment_text }}</p>{% endif %}
+    {% if practice.experiment_duration %}<p class="practice__term">Срок: {{ practice.experiment_duration }}</p>{% endif %}
+  </div>
+  {% endif %}
+  {% if practice.observe %}
+  <h2 class="group">Что наблюдать дальше</h2>
+  <ul class="watch">
+    {% for item in practice.observe %}<li>{{ item }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
+<section class="closing">
+  <img class="closing__eye" src="eye.png" alt="">
+  <div class="closing__mark">Cosmirror</div>
+  <div class="closing__disclaimer">
+    {{ disclaimer }}<br><br>
+    cosmirror.ru
+  </div>
+</section>
+
+</body>
+</html>

@@ -19,6 +19,7 @@ from core.services.report_lexicon import (
     SIGN_THEME,
     aspect_sentence,
     cycle_copy,
+    duration_span_sentence,
     natal_aspect_sentence,
     placement_sentence,
 )
@@ -476,9 +477,13 @@ def estimate_window(hit: dict[str, Any], sky_iso: str) -> dict[str, Any]:
         "saturn": "примерно 8–12 месяцев вокруг точного аспекта",
         "jupiter": "короче: недели или 2–3 месяца",
         "mars": "дни или несколько недель",
+        "venus": "дни или несколько недель",
+        "mercury": "обычно дни или около недели",
+        "sun": "обычно несколько дней вокруг точного аспекта",
+        "moon": "короткая: часы или 1–2 дня",
     }.get(str(hit.get("transit") or ""), "зависит от скорости планеты")
     return {
-        "span_note": span,
+        "span_note": duration_span_sentence(span),
         "peak_estimate": peak,
         "motion": hit.get("motion"),
         "confidence": "low" if days is None else "medium",

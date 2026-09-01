@@ -1,0 +1,802 @@
+/* ============================================================
+   COSMIRROR · REPORT STYLESHEET
+   Зафиксированная стилевая система PDF-отчёта.
+   Палитра снята с продакшн-PDF. Шрифты: Onest + Playfair Display.
+   ============================================================ */
+
+/* ---------- ШРИФТЫ ---------- */
+@font-face { font-family: "Onest"; src: url("../fonts/Onest-Regular.ttf"); font-weight: 400; font-style: normal; }
+@font-face { font-family: "Onest"; src: url("../fonts/Onest-Medium.ttf"); font-weight: 500; font-style: normal; }
+@font-face { font-family: "Onest"; src: url("../fonts/Onest-Medium.ttf"); font-weight: 600; font-style: normal; }
+
+@font-face { font-family: "Playfair Display"; src: url("../fonts/PlayfairDisplay-Regular.ttf"); font-weight: 400; font-style: normal; }
+@font-face { font-family: "Playfair Display"; src: url("../fonts/PlayfairDisplay-Italic.ttf"); font-weight: 400; font-style: italic; }
+@font-face { font-family: "Playfair Display"; src: url("../fonts/PlayfairDisplay-Regular.ttf"); font-weight: 600; font-style: normal; }
+@font-face { font-family: "Playfair Display"; src: url("../fonts/PlayfairDisplay-Italic.ttf"); font-weight: 600; font-style: italic; }
+@font-face { font-family: "DejaVu Sans"; src: url("../fonts/DejaVuSans.ttf"); font-weight: 400; font-style: normal; }
+
+/* ---------- ТОКЕНЫ ---------- */
+:root {
+  --navy:      #050D4A;
+  --navy-lift: #101751;
+  --line:      #3D426F;
+  --cream:     #F4EFE8;
+  --cream-dim: #A9A6BC;
+  --gold:      #F6E7A1;
+  --gold-deep: #C9A94E;
+
+  --serif: "Playfair Display", serif;
+  --sans:  "Onest", sans-serif;
+}
+
+/* ============================================================
+   СТРАНИЦА
+   Глаз-логотип живёт в фоне полей — появляется на каждой странице.
+   ============================================================ */
+@page {
+  size: A4;
+  margin: 21mm 24mm 17mm 34mm;
+  background: #050D4A;
+
+  /* глаз в углу над левым полем: по вертикали — на одной линии
+     с колонтитулом, по горизонтали — в маргинальной колонке */
+  @top-left-corner {
+    content: "";
+    background: url("eye.png") no-repeat right 6mm center / 8mm 8mm;
+    background-size: 8mm 8mm;
+  }
+
+  @bottom-center {
+    content: "Cosmirror · " counter(page);
+    font-family: "Onest", sans-serif;
+    font-size: 7.5pt;
+    letter-spacing: 0.08em;
+    color: #A9A6BC;
+  }
+}
+
+@page section {
+  @top-right {
+    content: string(section-title);
+    font-family: "Onest", sans-serif;
+    font-size: 8pt;
+    font-style: italic;
+    color: #A9A6BC;
+  }
+}
+
+/* обложка — без логотипа в поле и без колонтитулов, глаз стоит в контенте */
+@page cover {
+  margin: 0;
+  background: #050D4A;
+  @bottom-center { content: none; }
+  @top-left-corner { content: none; }
+}
+
+@page :blank { background: #050D4A; @bottom-center { content: none; } @top-right { content: none; } @top-left-corner { content: none; } }
+
+html { background: var(--navy); }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 10pt;
+  line-height: 1.54;
+  color: var(--cream);
+  hyphens: auto;
+  -weasy-hyphens: auto;
+  orphans: 2;
+  widows: 2;
+}
+
+/* ============================================================
+   ОБЛОЖКА
+   Сверху глаз -> вордмарк -> данные пользователя.
+   Снизу космопортрет во всю ширину, небо растворяется в фоне.
+   Натальной карты здесь НЕТ — она внутри раздела «Твоя карта».
+   ============================================================ */
+.cover {
+  page: cover;
+  break-after: page;
+  position: relative;
+  height: 297mm;
+  width: 210mm;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.cover__top {
+  padding: 26mm 26mm 0;
+  text-align: center;
+}
+.cover__eye {
+  width: 26mm;
+  height: 26mm;
+  display: block;
+  margin: 0 auto 8mm;
+}
+.cover__brand {
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 32pt;
+  line-height: 1;
+  color: var(--gold);
+  margin: 0 0 4mm;
+}
+.cover__subtitle {
+  font-family: var(--sans);
+  font-size: 10pt;
+  color: var(--cream-dim);
+  margin: 0 0 13mm;
+}
+
+/* данные пользователя — вместо «в фокусе: …» */
+.cover__person { margin: 0 16mm; }
+.cover__name {
+  font-family: var(--serif);
+  font-size: 22pt;
+  color: var(--cream);
+  margin: 0 0 4mm;
+}
+.cover__birth {
+  font-family: var(--sans);
+  font-size: 9pt;
+  letter-spacing: 0.06em;
+  color: var(--cream-dim);
+}
+/* дата · время · место — одной строкой, разделитель рисует CSS */
+.cover__birth span + span::before {
+  content: "·";
+  color: var(--gold-deep);
+  margin: 0 2.5mm;
+}
+
+/* космопортрет внизу + растворение верхней кромки */
+.cover__art {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 117mm;              /* 210mm x пропорция картинки, без обрезки */
+}
+.cover__art img {
+  width: 210mm;
+  height: auto;
+  display: block;
+}
+.cover__fade {
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 117mm;
+  background: linear-gradient(to bottom,
+    #050D4A 0%,
+    rgba(5,13,74,0.72) 8%,
+    rgba(5,13,74,0.30) 18%,
+    rgba(5,13,74,0.08) 27%,
+    rgba(5,13,74,0) 35%);
+}
+
+/* ============================================================
+   ОГЛАВЛЕНИЕ
+   Номера страниц вычисляет WeasyPrint через target-counter —
+   вручную их не проставлять.
+   ============================================================ */
+.toc h1 {
+  font-family: var(--serif); font-style: italic; font-weight: 400;
+  font-size: 23pt; color: var(--gold); margin: 0 0 9mm;
+}
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc; }
+.toc li { counter-increment: toc; }
+.toc a {
+  display: flex; align-items: baseline;
+  padding: 3mm 0;
+  border-bottom: 0.4pt solid var(--line);
+  font-size: 11pt;
+  color: var(--cream);
+  text-decoration: none;
+}
+.toc a::before {
+  content: counter(toc, decimal-leading-zero);
+  font-family: var(--serif); color: var(--gold-deep);
+  width: 11mm; flex: none;
+}
+.toc a::after {
+  content: target-counter(attr(href), page);
+  font-family: var(--sans);
+  font-size: 9pt;
+  color: var(--cream-dim);
+  margin-left: auto;
+}
+
+/* ============================================================
+   РАЗДЕЛ
+   ============================================================ */
+section.chapter { break-before: page; page: section; }
+
+h1.chapter__title {
+  string-set: section-title content();
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 21pt;
+  line-height: 1.08;
+  color: var(--gold);
+  margin: 0 0 2.5mm;
+  padding-bottom: 3mm;
+  border-bottom: 0.8pt solid var(--gold-deep);
+}
+.chapter__lead {
+  font-size: 9.5pt;
+  color: var(--cream-dim);
+  margin: 0 0 6.5mm;
+}
+
+h2 {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 13.5pt;
+  line-height: 1.28;
+  color: var(--gold);
+  margin: 6.5mm 0 2.2mm;
+  break-after: avoid;
+}
+h2:first-of-type { margin-top: 0; }
+
+h3 {
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 11pt;
+  color: var(--cream-dim);
+  margin: 7mm 0 2.5mm;
+  break-after: avoid;
+}
+
+p { margin: 0 0 2.8mm; text-align: justify; text-align-last: left; }
+p:last-child { margin-bottom: 0; }
+strong, b { color: var(--gold); font-weight: 500; }
+
+/* ============================================================
+   НАТАЛЬНАЯ КАРТА — внутри раздела, не на обложке
+   ============================================================ */
+.wheel {
+  break-inside: avoid;
+  margin: 0 0 7mm;
+  text-align: center;
+}
+.wheel img,
+.wheel svg { width: 122mm; height: auto; display: block; margin: 0 auto; }
+.wheel__caption {
+  font-family: var(--sans);
+  font-size: 8pt;
+  color: var(--cream-dim);
+  margin-top: 4mm;
+}
+
+/* ============================================================
+   ПОЛОЖЕНИЯ ПЛАНЕТ
+   Источник: document.factual.natal.natal_table
+   sign_ru · degree · minute · house · retrograde
+   ============================================================ */
+.positions {
+  width: 100%;
+  table-layout: fixed;   /* иначе сумма фикс. ширин < полосы и линейки обрываются */
+  border-collapse: collapse;
+  margin: 0 0 7mm;
+  font-size: 9pt;
+}
+.positions th {
+  font-family: var(--sans);
+  font-weight: 400;
+  font-size: 8pt;
+  color: var(--cream-dim);
+  text-align: left;
+  padding: 0 0 2mm;
+  border-bottom: 0.5pt solid var(--gold-deep);
+}
+.positions th.num, .positions td.num { text-align: right; }
+.positions td {
+  padding: 2.2mm 0;
+  border-bottom: 0.4pt solid var(--line);
+  vertical-align: baseline;
+}
+.positions tr { break-inside: avoid; }
+/* ширины колонок — в долях полосы, чтобы правый край не съезжал */
+.positions col.c-g     { width: 7%; }
+.positions col.c-name  { width: 33%; }
+.positions col.c-sign  { width: 24%; }
+.positions col.c-dms   { width: 20%; }
+.positions col.c-house { width: 16%; }
+.positions .g {
+  font-family: "Playfair Display", "DejaVu Sans", serif;
+  font-size: 11pt; color: var(--gold);
+}
+.positions .name { font-family: var(--serif); font-size: 11pt; color: var(--cream); }
+.positions .sign { color: var(--cream); }
+/* градус — главный носитель точности, он же главный акцент */
+.positions .dms {
+  font-family: var(--sans);
+  font-variant-numeric: tabular-nums;
+  color: var(--gold);
+  letter-spacing: 0.02em;
+}
+.positions .house { color: var(--cream-dim); }
+.positions .retro { color: var(--gold-deep); font-size: 8pt; }
+
+/* ============================================================
+   АСПЕКТЫ — фактический слой с орбами
+   Источник: document.factual.natal.natal_aspects
+   ============================================================ */
+.orbs { column-count: 2; column-gap: 9mm; margin: 0 0 6mm; }
+.orb {
+  display: flex; align-items: baseline;
+  padding: 1.8mm 0;
+  border-bottom: 0.4pt solid var(--line);
+  break-inside: avoid;
+  font-size: 8.5pt;
+}
+.orb__pair { flex: 1; color: var(--cream); }
+.orb__sym {
+  font-family: "DejaVu Sans", sans-serif;
+  color: var(--gold);
+  margin: 0 1.5mm;
+}
+.orb__val {
+  font-variant-numeric: tabular-nums;
+  color: var(--cream-dim);
+  margin-left: 2mm;
+}
+/* сила аспекта: чем меньше орб, тем плотнее полоса */
+.orb__bar {
+  width: 12mm; height: 1.1mm;
+  background: var(--line);
+  margin-left: 2.5mm;
+  flex: none;
+  align-self: center;
+}
+.orb__fill { display: block; height: 1.1mm; background: var(--gold); }
+.orb--hard .orb__fill { background: var(--gold); }
+.orb--soft .orb__fill { background: var(--gold-deep); }
+
+/* ============================================================
+   ДОМА
+   ============================================================ */
+.houses { column-count: 2; column-gap: 9mm; }
+.house {
+  break-inside: avoid;
+  display: flex;
+  padding: 2.4mm 0;
+  border-bottom: 0.4pt solid var(--line);
+}
+.house__num {
+  font-family: var(--serif);
+  font-size: 11pt;
+  color: var(--gold-deep);
+  width: 6mm; flex: none;
+}
+.house__body { flex: 1; }
+.house__sign {
+  display: block;
+  font-family: var(--serif);
+  font-size: 10.5pt;
+  color: var(--gold);
+}
+.house__text { display: block; font-size: 8.5pt; line-height: 1.5; color: var(--cream); }
+.house__in {
+  display: block;
+  margin-top: 0.8mm;
+  font-size: 7.5pt;
+  color: var(--cream-dim);
+}
+
+/* ============================================================
+   «ПОЧЕМУ МЫ ЭТО ВИДИМ» — привязка к расчёту
+   ============================================================ */
+.why {
+  font-family: var(--sans);
+  font-size: 8.5pt;
+  line-height: 1.55;
+  color: var(--gold);
+  background: var(--navy-lift);
+  border-left: 1.5pt solid var(--gold-deep);
+  padding: 2.6mm 4mm;
+  margin: 3.2mm 0;
+  break-inside: avoid;
+}
+.why::before {
+  content: "почему мы это видим";
+  display: block;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 9pt;
+  color: var(--cream-dim);
+  margin-bottom: 1.5mm;
+}
+
+/* ============================================================
+   ВОПРОС
+   ============================================================ */
+/* вопрос: курсив и воздух вместо значка — знак «?» уже стоит в конце фразы */
+.ask {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 12pt;
+  line-height: 1.5;
+  color: var(--gold);
+  padding: 4mm 0;
+  margin: 4.5mm 0;
+  border-top: 0.4pt solid var(--line);
+  border-bottom: 0.4pt solid var(--line);
+  break-inside: avoid;
+}
+.ask + .ask { border-top: none; margin-top: -4.5mm; }
+
+/* ============================================================
+   ТРАНЗИТ / АСПЕКТ
+   ============================================================ */
+/* транзит не должен целиком прыгать на новую страницу — рвём по абзацам */
+.transit { margin-bottom: 5mm; }
+.transit__formula {
+  display: inline-block;
+  font-family: var(--sans);
+  font-size: 8pt;
+  color: var(--gold);
+  border: 0.5pt solid var(--gold-deep);
+  border-radius: 2pt;
+  padding: 0.8mm 2.2mm;
+  margin-bottom: 3mm;
+}
+.transit__dates { font-size: 8pt; color: var(--cream-dim); margin-left: 3mm; }
+
+/* ============================================================
+   РАЗЛИЧЕНИЯ «X ≠ Y»
+   ============================================================ */
+.distinct { margin: 5mm 0; }
+.distinct dt {
+  font-family: var(--serif);
+  font-size: 11.5pt;
+  color: var(--gold);
+  margin-top: 4.5mm;
+  break-after: avoid;
+}
+.distinct dd { margin: 1mm 0 0; font-size: 10pt; color: var(--cream); }
+
+/* ============================================================
+   ПРАКТИКА
+   ============================================================ */
+.practice {
+  background: var(--navy-lift);
+  border: 0.5pt solid var(--line);
+  padding: 6mm 7mm;
+  margin: 6mm 0;
+  break-inside: avoid;
+}
+.practice__label {
+  font-family: var(--serif); font-style: italic;
+  font-size: 10pt; color: var(--gold-deep); margin-bottom: 3mm;
+}
+.practice__term { font-size: 8.5pt; color: var(--cream-dim); margin-top: 4mm; }
+
+ul.watch { list-style: none; padding: 0; margin: 4mm 0; }
+ul.watch li { padding-left: 7mm; margin-bottom: 3mm; break-inside: avoid; position: relative; }
+ul.watch li::before {
+  content: "·"; position: absolute; left: 2mm; top: -0.6mm;
+  color: var(--gold); font-size: 15pt; line-height: 1;
+}
+
+/* ============================================================
+   ФИНАЛ — только дисклеймер, без полей для записи
+   ============================================================ */
+.closing {
+  break-before: page;
+  height: 225mm;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+}
+.closing__eye { width: 20mm; height: 20mm; margin: 0 auto 8mm; display: block; }
+.closing__mark {
+  font-family: var(--serif); font-style: italic;
+  font-size: 20pt; color: var(--gold); margin-bottom: 10mm;
+}
+.closing__disclaimer {
+  font-size: 9pt;
+  line-height: 1.8;
+  color: var(--cream-dim);
+  max-width: 118mm;
+  margin: 0 auto;
+}
+
+/* ============================================================
+   ГЛИФЫ
+   DejaVu покрывает всё, кроме секстиля ⚹ — его добирает Noto.
+   ============================================================ */
+:root { --glyph: "DejaVu Sans", "Playfair Display", sans-serif;
+        --tension:  #F6E7A1;   /* напряжение — золото */
+        --resource: #92B4E3;   /* ресурс — холодный синий */ }
+
+/* ============================================================
+   ОТКРЫВАЮЩИЙ РАЗВОРОТ ГЛАВЫ «ТВОЯ КАРТА»
+   Три опорные точки: Солнце · Луна · Асцендент
+   ============================================================ */
+.trio { display: flex; gap: 6mm; margin: 0 0 8mm; }
+.trio__item {
+  flex: 1;
+  border-top: 0.8pt solid var(--gold-deep);
+  padding-top: 3.5mm;
+}
+.trio__glyphs {
+  font-family: var(--glyph);
+  font-size: 15pt;
+  color: var(--gold);
+  line-height: 1;
+  margin-bottom: 2.5mm;
+}
+.trio__name {
+  font-family: var(--sans); font-size: 8.5pt;
+  color: var(--cream-dim); margin-bottom: 1.5mm;
+}
+.trio__sign { font-family: var(--serif); font-size: 13pt; color: var(--cream); }
+.trio__dms {
+  font-family: var(--sans); font-size: 8.5pt;
+  font-variant-numeric: tabular-nums;
+  color: var(--gold); margin-bottom: 2.5mm;
+}
+.trio__fact { font-size: 8.5pt; line-height: 1.5; color: var(--cream-dim); }
+
+/* легенда колеса */
+.legend {
+  display: flex; gap: 8mm; justify-content: center;
+  margin-top: 3mm; font-size: 7.5pt; color: var(--cream-dim);
+}
+.legend span { display: flex; align-items: center; }
+.legend i { width: 8mm; height: 0; margin-right: 2mm; display: inline-block; }
+.legend .l-hard { border-top: 1pt solid var(--tension); }
+.legend .l-soft { border-top: 1pt dashed var(--resource); }
+
+/* ============================================================
+   КАРТОЧКА ПЛАНЕТЫ
+   ============================================================ */
+.pcard { margin: 0 0 9mm; }
+.pcard__head {
+  display: flex; align-items: baseline;
+  border-bottom: 0.8pt solid var(--gold-deep);
+  padding-bottom: 2.5mm; margin-bottom: 3.5mm;
+}
+.pcard__glyphs {
+  font-family: var(--glyph); font-size: 14pt; color: var(--gold);
+  margin-right: 4mm; flex: none;
+}
+.pcard__title { font-family: var(--serif); font-size: 15pt; color: var(--cream); flex: 1; }
+.pcard__house {
+  font-family: var(--sans); font-size: 9pt; color: var(--cream-dim);
+}
+.pcard__headline {
+  font-family: var(--serif); font-size: 12.5pt; line-height: 1.4;
+  color: var(--gold); margin-bottom: 3mm;
+}
+
+/* модификатор дома — врезка */
+.mod {
+  border-left: 1.2pt solid var(--line);
+  padding-left: 5mm; margin: 4mm 0;
+  font-size: 9.5pt; color: var(--cream);
+}
+.mod::before {
+  content: "в доме это звучит так";
+  display: block; font-family: var(--serif); font-style: italic;
+  font-size: 9pt; color: var(--cream-dim); margin-bottom: 1.5mm;
+}
+
+/* астрообъяснение — мельче тела */
+.astro {
+  font-size: 8.5pt; line-height: 1.55; color: var(--cream-dim);
+  margin: 3.5mm 0;
+}
+
+/* зона для исследования */
+.zone {
+  background: var(--navy-lift);
+  border: 0.5pt solid var(--line);
+  padding: 4.5mm 5.5mm; margin: 4mm 0;
+  break-inside: avoid;
+}
+.zone__label {
+  font-family: var(--serif); font-style: italic;
+  font-size: 10pt; color: var(--gold-deep); margin-bottom: 2.5mm;
+}
+.zone p { font-size: 9.5pt; margin-bottom: 2.5mm; }
+.zone .ask { border: none; padding: 0; margin: 2.5mm 0 0; font-size: 11.5pt; }
+
+/* ряд «почему мы это видим» из глифов */
+.glyphrow {
+  display: flex; flex-wrap: wrap; gap: 2mm 4mm;
+  border-top: 0.4pt solid var(--line);
+  padding-top: 2.5mm; margin-top: 4mm;
+  font-size: 8pt; color: var(--cream-dim);
+}
+.glyphrow__label {
+  font-family: var(--serif); font-style: italic; font-size: 9pt;
+  width: 100%; margin-bottom: 1mm;
+}
+.gpair { font-family: var(--glyph); font-size: 10pt; color: var(--gold); }
+.gpair.hard  { color: var(--tension); }
+.gpair.soft  { color: var(--resource); }
+
+/* ============================================================
+   КАРТОЧКА АСПЕКТА
+   ============================================================ */
+.acard { margin: 0 0 10mm; }
+
+.acard__meta { display: flex; align-items: baseline; margin-bottom: 2.5mm; }
+/* категория — залитая пилюля, как на сайте. Без обводки:
+   рамка внутри рамки дробит страницу. */
+.tag {
+  font-family: var(--sans);
+  font-size: 7.5pt;
+  font-weight: 500;
+  border-radius: 99pt;
+  padding: 1.1mm 3.2mm;
+  margin-right: 3mm;
+}
+.tag--hard  { color: #2A2410; background: var(--tension); }
+.tag--soft  { color: #0C1830; background: var(--resource); }
+.tag--mixed { color: #2A2410; background: var(--gold-deep); }
+.acard__orb {
+  font-family: var(--sans); font-size: 8pt;
+  font-variant-numeric: tabular-nums; color: var(--cream-dim);
+}
+.acard__pair {
+  font-family: var(--glyph); font-size: 14pt; color: var(--gold);
+  margin-bottom: 1.5mm;
+}
+.acard__name { font-family: var(--serif); font-size: 14pt; color: var(--cream); margin-bottom: 3mm; }
+.acard__headline {
+  font-family: var(--serif); font-size: 12pt; line-height: 1.4;
+  color: var(--gold); margin-bottom: 3mm;
+}
+
+/* «как это может проявляться» */
+ul.shows { list-style: none; padding: 0; margin: 3.5mm 0; }
+ul.shows li {
+  position: relative; padding-left: 6mm; margin-bottom: 2mm;
+  font-size: 9.5pt; break-inside: avoid;
+}
+ul.shows li::before {
+  content: "—"; position: absolute; left: 0; color: var(--gold-deep);
+}
+
+/* ресурс / напряжение / как работать */
+.facet { margin: 3.5mm 0; break-inside: avoid; }
+.facet__label {
+  font-family: var(--serif); font-style: italic;
+  font-size: 10pt; margin-bottom: 1.2mm;
+}
+.facet--resource .facet__label { color: var(--resource); }
+.facet--tension  .facet__label { color: var(--gold-deep); }
+.facet--work     .facet__label { color: var(--gold); }
+.facet p { font-size: 9.5pt; margin: 0; }
+
+/* ============================================================
+   ДОМА — сетка 12
+   ============================================================ */
+.hgrid { column-count: 2; column-gap: 8mm; }
+.hcell {
+  break-inside: avoid;
+  border-top: 0.5pt solid var(--line);
+  padding: 3mm 0;
+}
+.hcell__head { display: flex; align-items: baseline; margin-bottom: 1.5mm; }
+.hcell__num {
+  font-family: var(--serif); font-size: 12pt; color: var(--gold-deep);
+  width: 7mm; flex: none;
+}
+.hcell__glyph { font-family: var(--glyph); font-size: 10pt; color: var(--gold); margin-right: 2mm; }
+.hcell__sign { font-family: var(--serif); font-size: 11pt; color: var(--gold); }
+.hcell__theme { font-size: 8.5pt; line-height: 1.5; color: var(--cream); }
+.hcell__in {
+  display: block; margin-top: 1.5mm;
+  font-family: var(--glyph); font-size: 9.5pt; color: var(--cream-dim);
+}
+
+
+/* ============================================================
+   ШМУЦТИТУЛ РАЗДЕЛА
+   Отдельная страница: номер, название, подводка, изображение внизу.
+   Без колонтитулов и без глаза — это разворотная пауза.
+   ============================================================ */
+@page divider {
+  margin: 0;
+  background: #050D4A;
+  @bottom-center { content: none; }
+  @top-right { content: none; }
+  @top-left-corner { content: none; }
+}
+
+.divider {
+  page: divider;
+  break-before: page;
+  break-after: page;
+  position: relative;
+  height: 297mm;
+  width: 210mm;
+  overflow: hidden;
+}
+.divider__top {
+  padding: 52mm 30mm 0;
+  text-align: center;
+}
+.divider__eye {
+  width: 22mm; height: 22mm;
+  display: block; margin: 0 auto 10mm;
+}
+.divider__title {
+  string-set: section-title content();
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 38pt;
+  line-height: 1.08;
+  color: var(--gold);
+  margin: 0;
+}
+
+.divider__art {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 158mm;
+}
+.divider__art img {
+  width: 210mm;
+  height: auto;
+  display: block;
+}
+.divider__fade {
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 158mm;
+  background: linear-gradient(to bottom,
+    #050D4A 0%,
+    rgba(5,13,74,0.72) 8%,
+    rgba(5,13,74,0.30) 18%,
+    rgba(5,13,74,0.08) 27%,
+    rgba(5,13,74,0) 35%);
+}
+
+/* содержимое раздела теперь идёт без крупного h1 —
+   название уже стоит на шмуцтитуле */
+section.chapter { break-before: page; page: section; }
+.chapter--after-divider { break-before: auto; }
+
+
+/* ============================================================
+   ГРУППА ПЛАНЕТ внутри раздела «Твоя карта»
+   («Солнце, Луна, Асцендент», «Как работает твой ум» и т.д.)
+   Это подзаголовок, а не раздел: своей страницы не получает.
+   ============================================================ */
+h2.group {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 16pt;
+  color: var(--gold);
+  margin: 11mm 0 5mm;
+  padding-bottom: 2.5mm;
+  border-bottom: 0.5pt solid var(--line);
+  break-after: avoid;
+}
+h2.group:first-of-type { margin-top: 0; }
+
+.story { margin: 0 0 8mm; }
+.story__title {
+  font-family: var(--serif);
+  font-size: 13pt;
+  color: var(--gold);
+  margin: 0 0 2.5mm;
+}
+.paircap {
+  font-size: 8.5pt;
+  color: var(--cream-dim);
+  margin: 0 0 2.5mm;
+}
+.paircap .gpair { margin-right: 2mm; }
+.lede { font-size: 9.5pt; color: var(--cream-dim); margin: 0 0 5mm; }

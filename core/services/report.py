@@ -153,6 +153,32 @@ def build_paid_report(order: Order) -> dict[str, Any]:
     }
 
 
+def customer_name_for_order(order: Order) -> str:
+    """Имя с квиза онбординга, иначе с лида. Только для письма и PDF, не для GET кабинета."""
+    session = order.session
+    if session is not None:
+        from core.services.personalize import quiz_from_session
+
+        quiz_name = str(quiz_from_session(session).get("name") or "").strip()
+        if quiz_name:
+            return quiz_name
+    lead = order.waitlist_lead
+    if lead and (lead.name or "").strip():
+        return lead.name.strip()
+    if session and session.waitlist_lead and (session.waitlist_lead.name or "").strip():
+        return session.waitlist_lead.name.strip()
+    return ""
+
+
+def paid_report_for_pdf(order: Order) -> dict[str, Any]:
+    """Полный отчёт для PDF: имя на обложке, без публичного стрипа кабинета."""
+    report = build_paid_report(order)
+    person = report.get("person")
+    if isinstance(person, dict):
+        person["name"] = customer_name_for_order(order)
+    return report
+
+
 def public_paid_report(order: Order) -> dict[str, Any]:
     """Отчёт для кабинета: без ФИО, почты и внутренних payload. Дата рождения нужна шапке карты."""
     report = build_paid_report(order)

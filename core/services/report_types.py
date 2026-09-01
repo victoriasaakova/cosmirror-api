@@ -44,6 +44,7 @@ PDF_OUTLINE: list[str] = [
     SECTION_REQUEST,
     SECTION_PRACTICE,
 ]
+# Порядок HTML/WeasyPrint PDF. Веб-вкладки — WEB_TABS, их не смешивать.
 
 # --- Planets / points ----------------------------------------------------
 

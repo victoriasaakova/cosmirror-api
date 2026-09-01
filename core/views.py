@@ -978,9 +978,9 @@ class OrderReportPdfView(APIView):
         if order is None or order.status != Order.Status.PAID:
             return Response({"detail": "Отчёт будет после оплаты."}, status=status.HTTP_403_FORBIDDEN)
         from core.services.pdf_report import render_report_pdf
-        from core.services.report import public_paid_report
+        from core.services.report import paid_report_for_pdf
 
-        pdf = render_report_pdf(public_paid_report(order))
+        pdf = render_report_pdf(paid_report_for_pdf(order))
         response = HttpResponse(pdf, content_type="application/pdf")
         response["Content-Disposition"] = 'attachment; filename="cosmirror-report.pdf"'
         return response

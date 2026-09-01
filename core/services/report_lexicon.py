@@ -180,6 +180,31 @@ def cycle_copy(transit: str, polarity: str) -> dict[str, str]:
     }
 
 
+def as_sentence(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if text[-1] in ".!?…":
+        return text
+    return f"{text}."
+
+
+def duration_span_sentence(span: str) -> str:
+    """Make a window note read as cycle duration, with a closing period."""
+    span = (span or "").strip()
+    if not span:
+        return ""
+    lowered = span.rstrip(".!?").replace("ё", "е").strip().lower()
+    if lowered in {
+        "зависит от скорости планеты",
+        "длительность зависит от скорости планеты",
+    }:
+        return "Длительность этого цикла зависит от скорости планеты."
+    if lowered.startswith("длительность"):
+        return as_sentence(span)
+    return as_sentence(f"Длительность этого цикла — {span}")
+
+
 SIGN_IN = {
     "aries": "в Овне",
     "taurus": "в Тельце",

@@ -12,7 +12,7 @@ from django.utils import timezone
 from core.models import Order
 from core.services.mailer import MailerError, send_email
 from core.services.pdf_report import render_report_pdf
-from core.services.report import build_paid_report, report_page_url
+from core.services.report import customer_name_for_order, paid_report_for_pdf, report_page_url
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ def email_paid_report(order: Order, *, force: bool = False, allow_unpaid_demo: b
     if order.fulfilled_at and not force:
         return False
 
-    report = build_paid_report(order)
+    report = paid_report_for_pdf(order)
     pdf = render_report_pdf(report)
     page_url = report_page_url(order)
     to = (order.customer_email or "").strip()
@@ -71,7 +71,7 @@ def email_paid_report(order: Order, *, force: bool = False, allow_unpaid_demo: b
         order.save(update_fields=["fulfillment_error", "updated_at"])
         raise FulfillmentError(order.fulfillment_error)
 
-    name = _customer_name(order)
+    name = customer_name_for_order(order)
     subject = "Персональный астрологический отчёт — Cosmirror"
     text = _plain_body(name=name, page_url=page_url)
     html_body = _html_body(name=name, page_url=page_url)
@@ -118,19 +118,7 @@ def update_order_email_and_resend(order: Order, email: str) -> Order:
 
 
 def _customer_name(order: Order) -> str:
-    session = order.session
-    if session is not None:
-        from core.services.personalize import quiz_from_session
-
-        quiz_name = str(quiz_from_session(session).get("name") or "").strip()
-        if quiz_name:
-            return quiz_name
-    lead = order.waitlist_lead
-    if lead and (lead.name or "").strip():
-        return lead.name.strip()
-    if session and session.waitlist_lead and (session.waitlist_lead.name or "").strip():
-        return session.waitlist_lead.name.strip()
-    return ""
+    return customer_name_for_order(order)
 
 
 def _greeting(name: str) -> str:

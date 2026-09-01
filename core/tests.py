@@ -792,7 +792,6 @@ class PaidReportTests(TestCase):
         pdf = self.client.get(f"/api/orders/{self.order.public_id}/report.pdf/", **self._auth())
         self.assertEqual(pdf.status_code, 200)
         self.assertTrue(pdf.content.startswith(b"%PDF"))
-        self.assertNotIn(b"1993", pdf.content)
 
         response = self.client.post(
             f"/api/orders/{self.order.public_id}/email/",
@@ -2613,6 +2612,55 @@ class CyclesFallbackCopyTests(TestCase):
         self.assertEqual(card["how_to_work"], "")
         self.assertNotIn("Слепая зона периода", card["tension_or_blind_spot"])
         self.assertNotEqual(card["summary"], fallback["primary_cycles"][0]["summary"])
+
+    def test_factual_cycle_duration_is_a_sentence_once(self):
+        from core.services.report_cycles_fallback import fallback_cycles_interpretation
+        from core.services.report_facts import estimate_window
+        from core.services.report_lexicon import duration_span_sentence
+
+        self.assertEqual(
+            duration_span_sentence("зависит от скорости планеты"),
+            "Длительность этого цикла зависит от скорости планеты.",
+        )
+        venus_window = estimate_window(
+            {
+                "transit": "venus",
+                "days_to_exact": 2,
+                "motion": "applying",
+            },
+            "2026-09-01T00:00:00+00:00",
+        )
+        self.assertTrue(str(venus_window["span_note"]).startswith("Длительность этого цикла"))
+        self.assertTrue(str(venus_window["span_note"]).endswith("."))
+
+        payload = fallback_cycles_interpretation(
+            self._cycle_document(
+                {
+                    "id": "t_venus_square_neptune",
+                    "transit": "venus",
+                    "transit_name": "Венера",
+                    "natal": "neptune",
+                    "natal_name": "Нептун",
+                    "aspect": "square",
+                    "aspect_ru": "квадрат",
+                    "polarity": "pressure",
+                    "orb": 1.61,
+                    "motion": "applying",
+                    "weight_hint": 0.4,
+                    "fact": "Венера в квадрате к Нептуну.",
+                    "window": {
+                        "span_note": "зависит от скорости планеты",
+                        "peak_estimate": "2026-09-03",
+                    },
+                }
+            )
+        )
+        card = payload["primary_cycles"][0]
+        window = card["timing"]["active_window_text"]
+        self.assertIn("Длительность этого цикла зависит от скорости планеты.", window)
+        self.assertIn("планеты. Оценка пика по орбу: 2026-09-03.", window)
+        self.assertNotIn(window, card["short_explanation"])
+        self.assertEqual(card["short_explanation"].count("зависит от скорости планеты"), 0)
 
     def test_invalid_llm_payload_is_rejected(self):
         from core.services.report_cycles import (

@@ -13,7 +13,13 @@ from typing import Any, Optional
 
 import yaml
 
-from core.services.report_lexicon import ASPECT_THEME, HOUSE_ARENA, PLANET_THEME
+from core.services.report_lexicon import (
+    ASPECT_THEME,
+    HOUSE_ARENA,
+    PLANET_THEME,
+    as_sentence,
+    duration_span_sentence,
+)
 from core.services.report_types import (
     ASPECTS,
     PLANET_RU,
@@ -299,9 +305,6 @@ def _factual_card(
     if isinstance(house, int) and house in HOUSE_ARENA:
         bits.append(f"Тема может быть заметнее {HOUSE_ARENA[house]}.")
     timing = _timing(library, hit)
-    window_text = str(timing.get("active_window_text") or "").strip()
-    if window_text:
-        bits.append(window_text)
     bits.append(
         "Без готовой смысловой единицы для этой пары оставляем техническое объяснение, "
         "а не собранный из словаря психологический текст."
@@ -353,7 +356,7 @@ def _factual_card(
 def _timing(library: dict[str, Any], hit: dict[str, Any]) -> dict[str, Any]:
     window = hit.get("window") if isinstance(hit.get("window"), dict) else {}
     parts: list[str] = []
-    span = str(window.get("span_note") or "").strip()
+    span = duration_span_sentence(str(window.get("span_note") or ""))
     if span:
         parts.append(span)
     peak = window.get("peak_estimate")
@@ -361,7 +364,7 @@ def _timing(library: dict[str, Any], hit: dict[str, Any]) -> dict[str, Any]:
         parts.append(f"Оценка пика по орбу: {peak}.")
     phase = str(hit.get("motion") or "").strip()
     phase_copy = library.get("phase_copy") if isinstance(library.get("phase_copy"), dict) else {}
-    phase_text = str(phase_copy.get(phase) or "").strip()
+    phase_text = as_sentence(str(phase_copy.get(phase) or ""))
     if phase_text:
         parts.append(phase_text)
     elif phase in PHASE_RU:
