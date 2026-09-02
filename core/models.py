@@ -489,6 +489,14 @@ class AuthToken(models.Model):
         on_delete=models.CASCADE,
         related_name="auth_tokens",
     )
+    device_id = models.CharField(
+        "Устройство",
+        max_length=64,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text="Стабильный id браузера. Пусто — старая сессия, привяжется с первого запроса.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField("Истекает")
 
@@ -516,6 +524,7 @@ class YandexOAuthState(models.Model):
     )
     code_verifier = models.CharField(max_length=128)
     redirect_uri = models.CharField(max_length=500, blank=True)
+    device_id = models.CharField("Устройство", max_length=64, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -574,3 +583,18 @@ class ReportSectionFeedback(models.Model):
 
     def __str__(self) -> str:
         return f"{self.order_id}:{self.section} ({self.rating})"
+
+
+class LlmRateBucket(models.Model):
+    """Счётчик вызовов LLM в скользящем окне (IP / пользователь / глобальный день)."""
+
+    key = models.CharField(max_length=160, unique=True)
+    window_started_at = models.DateTimeField()
+    count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        verbose_name = "Окно лимита LLM"
+        verbose_name_plural = "Окна лимитов LLM"
+
+    def __str__(self) -> str:
+        return f"{self.key}={self.count}"

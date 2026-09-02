@@ -23,6 +23,7 @@ from django.utils.dateparse import parse_datetime
 
 from core.models import Order
 from core.services import llm_client
+from core.services.llm_identity import bind_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -304,12 +305,21 @@ def _run_one_section(order: Order, section: str, generate: Callable[..., Any]) -
     return True
 
 
+def _bind_order_llm_identity(order: Order) -> None:
+    user_id = order.user_id
+    if not user_id:
+        session = getattr(order, "session", None)
+        user_id = getattr(session, "user_id", None)
+    bind_user_id(user_id)
+
+
 def _run_one_section_threaded(order_id: int, section: str, generate: Callable[..., Any]) -> bool:
     close_old_connections()
     try:
-        order = Order.objects.filter(pk=order_id).first()
+        order = Order.objects.filter(pk=order_id).select_related("session").first()
         if order is None or order.status != Order.Status.PAID:
             return False
+        _bind_order_llm_identity(order)
         return _run_one_section(order, section, generate)
     finally:
         close_old_connections()
@@ -387,9 +397,10 @@ def generate_missing_interpretive_layers(order: Order) -> None:
 def _run_paid_report_generation(order_id: int) -> None:
     close_old_connections()
     try:
-        order = Order.objects.filter(pk=order_id).first()
+        order = Order.objects.filter(pk=order_id).select_related("session").first()
         if order is None or order.status != Order.Status.PAID:
             return
+        _bind_order_llm_identity(order)
         try:
             generate_missing_interpretive_layers(order)
         except Exception:

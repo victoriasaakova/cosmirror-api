@@ -69,6 +69,10 @@ def chat_json(
 
     model_name = resolve_model(prompt_id, model=model)
 
+    from core.services.llm_limits import consume_llm_call
+
+    consume_llm_call(prompt_id=prompt_id or "")
+
     if provider == "polza":
         return _polza_chat_json(
             system=system,

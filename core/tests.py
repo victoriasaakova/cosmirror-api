@@ -40,7 +40,7 @@ class CorsHeadersTests(TestCase):
             HTTP_ORIGIN="http://localhost:3000",
             HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
             HTTP_ACCESS_CONTROL_REQUEST_HEADERS=(
-                "content-type,x-posthog-session-id,x-posthog-window-id,x-posthog-distinct-id"
+                "content-type,x-device-id,x-posthog-session-id,x-posthog-window-id,x-posthog-distinct-id"
             ),
         )
         self.assertEqual(response.status_code, 200)
@@ -50,6 +50,7 @@ class CorsHeadersTests(TestCase):
             if header.strip()
         }
         self.assertIn("content-type", allowed)
+        self.assertIn("x-device-id", allowed)
         self.assertIn("x-posthog-session-id", allowed)
         self.assertIn("x-posthog-window-id", allowed)
         self.assertIn("x-posthog-distinct-id", allowed)
@@ -3445,12 +3446,99 @@ class YandexAuthTests(TestCase):
         response = self.client.post("/api/me/dev-reset/", HTTP_AUTHORIZATION=f"Bearer {key}")
         self.assertEqual(response.status_code, 404)
 
-    @override_settings(AUTH_TOKEN_TTL_DAYS=7)
-    def test_token_ttl_is_seven_days(self):
+    @override_settings(AUTH_TOKEN_TTL_DAYS=2)
+    def test_token_ttl_is_two_days(self):
         _user, key = _make_user()
         token = AuthToken.objects.get(key=key)
         delta = token.expires_at - token.created_at
-        self.assertAlmostEqual(delta.total_seconds(), 7 * 86400, delta=2)
+        self.assertAlmostEqual(delta.total_seconds(), 2 * 86400, delta=2)
+
+    def test_bound_token_rejects_other_device(self):
+        _user, key = _make_user()
+        token = AuthToken.objects.get(key=key)
+        token.device_id = "only-this-browser-1"
+        token.save(update_fields=["device_id"])
+        ok = self.client.get(
+            "/api/me/",
+            HTTP_AUTHORIZATION=f"Bearer {key}",
+            HTTP_X_DEVICE_ID="only-this-browser-1",
+        )
+        self.assertEqual(ok.status_code, 200)
+        other = self.client.get(
+            "/api/me/",
+            HTTP_AUTHORIZATION=f"Bearer {key}",
+            HTTP_X_DEVICE_ID="another-browser-2",
+        )
+        self.assertEqual(other.status_code, 401)
+        self.assertTrue(AuthToken.objects.filter(key=key).exists())
+        missing = self.client.get("/api/me/", HTTP_AUTHORIZATION=f"Bearer {key}")
+        self.assertEqual(missing.status_code, 401)
+
+    def test_unbound_token_binds_to_first_device(self):
+        _user, key = _make_user()
+        first = self.client.get(
+            "/api/me/",
+            HTTP_AUTHORIZATION=f"Bearer {key}",
+            HTTP_X_DEVICE_ID="first-browser-aaaa",
+        )
+        self.assertEqual(first.status_code, 200)
+        token = AuthToken.objects.get(key=key)
+        self.assertEqual(token.device_id, "first-browser-aaaa")
+        second = self.client.get(
+            "/api/me/",
+            HTTP_AUTHORIZATION=f"Bearer {key}",
+            HTTP_X_DEVICE_ID="second-browser-bbbb",
+        )
+        self.assertEqual(second.status_code, 401)
+
+    def test_start_stores_device_id_on_oauth_state(self):
+        from core.models import YandexOAuthState
+
+        response = self.client.get(
+            "/api/auth/yandex/start/",
+            {
+                "session_token": str(self.session.token),
+                "device_id": "device-abc-12345",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        state = YandexOAuthState.objects.get()
+        self.assertEqual(state.device_id, "device-abc-12345")
+
+    @patch("core.services.yandex_oauth._get_json")
+    @patch("core.services.yandex_oauth._post_form")
+    def test_callback_binds_issued_token_to_device(self, post_form, get_json):
+        from core.models import YandexOAuthState
+
+        YandexOAuthState.objects.create(
+            nonce="state-device",
+            session=self.session,
+            code_verifier="verifier",
+            redirect_uri="http://localhost:3000/onboarding/contacts",
+            device_id="phone-device-001",
+        )
+        post_form.return_value = {"access_token": "ya-token"}
+        get_json.return_value = {
+            "id": "88",
+            "login": "deviceuser",
+            "default_email": "device@yandex.ru",
+            "display_name": "Дима",
+        }
+        response = self.client.post(
+            "/api/auth/yandex/callback/",
+            {"code": "999", "state": "state-device"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        key = response.json()["token"]
+        token = AuthToken.objects.get(key=key)
+        self.assertEqual(token.device_id, "phone-device-001")
+        me = self.client.get(
+            "/api/me/",
+            HTTP_AUTHORIZATION=f"Bearer {key}",
+            HTTP_X_DEVICE_ID="phone-device-001",
+        )
+        self.assertEqual(me.status_code, 200)
 
     @override_settings(DEBUG=True)
     def test_dev_login_issues_empty_session(self):
@@ -3946,6 +4034,53 @@ class FreeCabinetTests(TestCase):
             HTTP_AUTHORIZATION=self.auth,
         )
         self.assertEqual(preview.status_code, 404)
+
+
+class LlmRateLimitTests(TestCase):
+    def test_session_allows_retries_then_stops(self):
+        from core.services.llm_identity import _ip, _session_token, _user_id
+        from core.services.llm_limits import LLMLimitExceeded, consume_llm_call
+
+        _ip.set("203.0.113.9")
+        _user_id.set(None)
+        _session_token.set("11111111-1111-1111-1111-111111111111")
+        consume_llm_call(prompt_id="onboarding_insight", enforce=True)
+        consume_llm_call(prompt_id="onboarding_insight", enforce=True)
+        consume_llm_call(prompt_id="onboarding_insight", enforce=True)
+        with self.assertRaises(LLMLimitExceeded):
+            consume_llm_call(prompt_id="onboarding_insight", enforce=True)
+
+    def test_paid_report_calls_are_not_insight_limited(self):
+        from core.services.llm_identity import _ip, _session_token, _user_id
+        from core.services.llm_limits import consume_llm_call
+
+        _ip.set("203.0.113.9")
+        _user_id.set(7)
+        _session_token.set("11111111-1111-1111-1111-111111111111")
+        consume_llm_call(prompt_id="onboarding_insight", enforce=True)
+        consume_llm_call(prompt_id="paid_report_natal", enforce=True)
+        consume_llm_call(prompt_id="paid_report_aspects", enforce=True)
+
+    def test_another_session_still_gets_insight(self):
+        from core.services.llm_identity import _ip, _session_token, _user_id
+        from core.services.llm_limits import consume_llm_call
+
+        _ip.set("203.0.113.9")
+        _user_id.set(7)
+        _session_token.set("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        consume_llm_call(prompt_id="onboarding_insight", enforce=True)
+        _session_token.set("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+        consume_llm_call(prompt_id="onboarding_insight", enforce=True)
+
+    @override_settings(POLZA_API_KEY="test-key", GROQ_API_KEY="")
+    def test_failed_attempt_still_allows_reschedule(self):
+        from core.services.personalize import should_schedule_personalization
+
+        insight = _funnel_insight(source="templates")
+        insight["personalize_attempts"] = 1
+        self.assertTrue(should_schedule_personalization(insight))
+        insight["personalize_attempts"] = 3
+        self.assertFalse(should_schedule_personalization(insight))
 
 
 

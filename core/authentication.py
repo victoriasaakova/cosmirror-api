@@ -3,6 +3,8 @@ from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 
 from core.models import AuthToken
+from core.services.device_id import normalize_device_id
+from core.services.llm_identity import bind_user_id
 
 
 class BearerTokenAuthentication(BaseAuthentication):
@@ -26,6 +28,16 @@ class BearerTokenAuthentication(BaseAuthentication):
         if token.expires_at <= timezone.now():
             token.delete()
             raise AuthenticationFailed("Сессия истекла. Войди через Яндекс ID.")
+        device = normalize_device_id(request.META.get("HTTP_X_DEVICE_ID") or "")
+        if token.device_id:
+            if device != token.device_id:
+                raise AuthenticationFailed(
+                    "Сессия привязана к другому устройству. Войди через Яндекс ID."
+                )
+        elif device:
+            token.device_id = device
+            token.save(update_fields=["device_id"])
+        bind_user_id(token.user_id)
         return (token.user, token)
 
     def authenticate_header(self, request):

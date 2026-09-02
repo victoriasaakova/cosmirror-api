@@ -224,7 +224,11 @@ class YandexAuthStartView(APIView):
         after = (request.query_params.get("after") or "").strip().lower()
         try:
             uri = resolve_redirect_uri(requested)
-            url = build_authorize_url(session=session, requested_redirect=uri)
+            url = build_authorize_url(
+                session=session,
+                requested_redirect=uri,
+                device_id=request.query_params.get("device_id") or "",
+            )
         except YandexOAuthError as exc:
             return Response({"detail": exc.detail}, status=exc.status)
         if after == "account":
@@ -291,7 +295,10 @@ class AuthDevLoginView(APIView):
 
             session = seed_dev_free_cabinet(user)
             session_token = str(session.token)
-        auth_token = issue_auth_token(user)
+        auth_token = issue_auth_token(
+            user,
+            device_id=str(raw.get("device_id") or request.META.get("HTTP_X_DEVICE_ID") or ""),
+        )
         user_data = UserSerializer(user).data
         user_data["has_paid_report"] = _has_paid_report(user)
         if user_data["has_paid_report"]:
@@ -317,11 +324,13 @@ class YandexAuthCallbackView(APIView):
         if error:
             return redirect(f"{frontend}/onboarding/contacts/?error={quote(error)}")
         try:
-            session, profile = exchange_code(
+            session, profile, device_id = exchange_code(
                 code=str(request.query_params.get("code") or ""),
                 state=str(request.query_params.get("state") or ""),
             )
-            _user, auth_token = complete_yandex_login(session=session, profile=profile)
+            _user, auth_token = complete_yandex_login(
+                session=session, profile=profile, device_id=device_id
+            )
         except YandexOAuthError:
             return redirect(f"{frontend}/onboarding/contacts/?error=oauth")
         if _has_paid_report(_user):
@@ -344,11 +353,13 @@ class YandexAuthCallbackView(APIView):
 
     def post(self, request):
         try:
-            session, profile = exchange_code(
+            session, profile, device_id = exchange_code(
                 code=str(request.data.get("code") or ""),
                 state=str(request.data.get("state") or ""),
             )
-            user, auth_token = complete_yandex_login(session=session, profile=profile)
+            user, auth_token = complete_yandex_login(
+                session=session, profile=profile, device_id=device_id
+            )
         except YandexOAuthError as exc:
             return Response({"detail": exc.detail}, status=exc.status)
         user_data = UserSerializer(user).data

@@ -30,6 +30,7 @@ from core.models import (
     WaitlistLead,
     YandexOAuthState,
 )
+from core.services.device_id import normalize_device_id
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +151,12 @@ def _cleanup_states() -> None:
     YandexOAuthState.objects.filter(created_at__lt=cutoff).delete()
 
 
-def build_authorize_url(*, session: OnboardingSession, requested_redirect: str | None = None) -> str:
+def build_authorize_url(
+    *,
+    session: OnboardingSession,
+    requested_redirect: str | None = None,
+    device_id: str = "",
+) -> str:
     if not is_configured():
         raise YandexOAuthError("Яндекс ID не настроен.", 503)
     uri = resolve_redirect_uri(requested_redirect)
@@ -162,6 +168,7 @@ def build_authorize_url(*, session: OnboardingSession, requested_redirect: str |
         session=session,
         code_verifier=verifier,
         redirect_uri=uri,
+        device_id=normalize_device_id(device_id),
     )
     params = {
         "response_type": "code",
@@ -339,7 +346,7 @@ def _profile_from_info(info: dict[str, Any]) -> YandexProfile:
     )
 
 
-def exchange_code(*, code: str, state: str) -> tuple[OnboardingSession, YandexProfile]:
+def exchange_code(*, code: str, state: str) -> tuple[OnboardingSession, YandexProfile, str]:
     code = (code or "").strip()
     state = (state or "").strip()
     if not code or not state:
@@ -365,16 +372,18 @@ def exchange_code(*, code: str, state: str) -> tuple[OnboardingSession, YandexPr
     info = _get_json(f"{USERINFO_URL}?format=json", access_token=access_token)
     profile = _profile_from_info(info)
     session = record.session
+    device_id = normalize_device_id(record.device_id)
     record.delete()
-    return session, profile
+    return session, profile, device_id
 
 
-def issue_auth_token(user: User) -> AuthToken:
-    days = max(1, int(getattr(settings, "AUTH_TOKEN_TTL_DAYS", 7) or 7))
+def issue_auth_token(user: User, *, device_id: str = "") -> AuthToken:
+    days = max(1, int(getattr(settings, "AUTH_TOKEN_TTL_DAYS", 2) or 2))
     AuthToken.objects.filter(user=user).delete()
     return AuthToken.objects.create(
         key=secrets.token_hex(32),
         user=user,
+        device_id=normalize_device_id(device_id),
         expires_at=timezone.now() + timedelta(days=days),
     )
 
@@ -569,8 +578,9 @@ def complete_yandex_login(
     *,
     session: OnboardingSession,
     profile: YandexProfile,
+    device_id: str = "",
 ) -> tuple[User, AuthToken]:
     user = get_or_create_yandex_user(profile)
     given = quiz_name_from_session(session) or profile.display_name or profile.first_name
     attach_session_to_user(session, user, email=profile.email, name=given)
-    return user, issue_auth_token(user)
+    return user, issue_auth_token(user, device_id=device_id)

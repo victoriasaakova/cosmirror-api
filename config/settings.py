@@ -48,6 +48,7 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
+    "core.middleware.LlmIdentityMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -116,6 +117,7 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = (
     *default_headers,
     "idempotency-key",
+    "x-device-id",
     "x-posthog-session-id",
     "x-posthog-window-id",
     "x-posthog-distinct-id",
@@ -163,8 +165,12 @@ YANDEX_OAUTH_REDIRECT_URI = (
     os.getenv("YANDEX_OAUTH_REDIRECT_URI") or f"{FRONTEND_URL}/onboarding/contacts"
 ).strip()
 
-# Срок жизни Bearer-токена после Яндекс ID. 0 = запрещено (не используем).
-AUTH_TOKEN_TTL_DAYS = int(os.getenv("AUTH_TOKEN_TTL_DAYS") or "7")
+# Срок жизни Bearer-токена после Яндекс ID. Один токен = одно устройство.
+AUTH_TOKEN_TTL_DAYS = int(os.getenv("AUTH_TOKEN_TTL_DAYS") or "2")
+
+# Инсайт: пока модель не ответила — до N попыток на сессию. Успех = больше не генерим.
+# IP и user/day не режем: каждый человек должен получить свой LLM-инсайт.
+LLM_INSIGHT_ATTEMPTS_PER_SESSION = int(os.getenv("LLM_INSIGHT_ATTEMPTS_PER_SESSION") or "3")
 
 # Товар по умолчанию. Имя попадает в чек (54-ФЗ, до 128 символов).
 COSMIRROR_PRODUCT_SKU = (os.getenv("COSMIRROR_PRODUCT_SKU") or "personal_report").strip()

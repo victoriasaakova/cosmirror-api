@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import copy
 import json
 import logging
@@ -13,7 +14,9 @@ import threading
 from typing import Any, Optional
 
 from core.services import editorial, llm_client
+from core.services.llm_identity import bind_session_token, bind_user_id
 from core.services.person_name import sanitize_person_name
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -197,14 +200,26 @@ def insight_is_ready(insight: Optional[dict[str, Any]]) -> bool:
     return bool(isinstance(insight, dict) and insight.get("personalize_attempted"))
 
 
+def _max_insight_attempts() -> int:
+    try:
+        return max(1, int(getattr(settings, "LLM_INSIGHT_ATTEMPTS_PER_SESSION", 3) or 3))
+    except (TypeError, ValueError):
+        return 3
+
+
 def should_schedule_personalization(insight: Optional[dict[str, Any]]) -> bool:
+    """Пока нет успешного LLM-инсайта — пробуем. После успеха не крутим. Сбой — ещё попытки."""
     if not llm_client.is_configured():
         return False
     if is_personalized(insight):
         return False
-    if isinstance(insight, dict) and insight.get("personalize_attempted"):
-        return False
-    return True
+    attempts = 0
+    if isinstance(insight, dict):
+        try:
+            attempts = int(insight.get("personalize_attempts") or 0)
+        except (TypeError, ValueError):
+            attempts = 0
+    return attempts < _max_insight_attempts()
 
 
 def personalize_insight(
@@ -256,7 +271,8 @@ def personalize_insight(
 
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
-        future = pool.submit(_llm_path)
+        ctx = contextvars.copy_context()
+        future = pool.submit(ctx.run, _llm_path)
         # Один вызов Polza обычно 8–25с; не держим HTTP дольше этого.
         return future.result(timeout=45)
     except concurrent.futures.TimeoutError:
@@ -762,13 +778,20 @@ def schedule_session_personalization(session_id: int, chart_id: int, token: str)
     """Запустить LLM-разбор в фоне. Повторные вызовы с тем же token игнорируются."""
     if not token or not llm_client.is_configured():
         return
+    bind_session_token(token)
+    from core.models import OnboardingSession
+
+    session = OnboardingSession.objects.filter(pk=session_id).first()
+    if session and session.user_id:
+        bind_user_id(session.user_id)
     with _inflight_guard:
         if token in _inflight_tokens:
             return
         _inflight_tokens.add(token)
+    ctx = contextvars.copy_context()
     thread = threading.Thread(
-        target=_run_session_personalization,
-        args=(session_id, chart_id, token),
+        target=ctx.run,
+        args=(_run_session_personalization, session_id, chart_id, token),
         daemon=True,
         name=f"insight-{token[:8]}",
     )
@@ -781,11 +804,14 @@ def _run_session_personalization(session_id: int, chart_id: int, token: str) -> 
     from core.models import NatalChart, OnboardingSession
 
     close_old_connections()
+    bind_session_token(token)
     try:
         session = OnboardingSession.objects.filter(pk=session_id).first()
         chart = NatalChart.objects.filter(pk=chart_id).first()
         if not session or not chart or not isinstance(chart.chart_data, dict):
             return
+        if session.user_id:
+            bind_user_id(session.user_id)
         data = dict(chart.chart_data)
         insight = data.get("insight") if isinstance(data.get("insight"), dict) else {}
         if not should_schedule_personalization(insight):
@@ -806,8 +832,15 @@ def _run_session_personalization(session_id: int, chart_id: int, token: str) -> 
             natal=natal,
             quiz=quiz_from_session(session),
         )
-        if not is_personalized(personalized):
-            personalized = copy.deepcopy(personalized)
+        try:
+            attempts = int(insight.get("personalize_attempts") or 0)
+        except (TypeError, ValueError):
+            attempts = 0
+        personalized = copy.deepcopy(personalized)
+        personalized["personalize_attempts"] = attempts + 1
+        if is_personalized(personalized):
+            personalized.pop("personalize_attempted", None)
+        elif personalized["personalize_attempts"] >= _max_insight_attempts():
             personalized["personalize_attempted"] = True
         data["insight"] = personalized
         chart.chart_data = data
