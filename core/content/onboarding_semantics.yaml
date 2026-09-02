@@ -63,6 +63,8 @@ adapters:
           path:
             - self_realization
             - work_path
+          future:
+            - self_realization
       intent:
         raw_to_semantic:
           potential:

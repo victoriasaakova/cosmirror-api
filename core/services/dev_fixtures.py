@@ -151,10 +151,11 @@ def _create_session(
 
 
 def _write_quiz_answers(session: OnboardingSession) -> None:
-    slugs = list(DEV_REPORT_QUIZ.keys()) + ["birth", "contacts"]
+    slugs = list(DEV_REPORT_QUIZ.keys()) + ["understood", "birth", "contacts"]
     steps = {step.slug: step for step in OnboardingStep.objects.filter(slug__in=slugs)}
     payloads = {
         **DEV_REPORT_QUIZ,
+        "understood": {"acknowledged": True},
         "birth": {
             "birth_date": DEV_REPORT_BIRTH_DATE.isoformat(),
             "birth_time": DEV_REPORT_BIRTH_TIME.strftime("%H:%M"),

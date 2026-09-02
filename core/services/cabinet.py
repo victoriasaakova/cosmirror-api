@@ -162,7 +162,9 @@ def _person_from_session(user, session, natal: dict[str, Any]) -> dict[str, Any]
 
 def _public_quiz(quiz: dict[str, Any]) -> dict[str, Any]:
     focus = quiz.get("focus")
-    if not isinstance(focus, list):
+    if isinstance(focus, str):
+        focus = [focus] if focus.strip() else []
+    elif not isinstance(focus, list):
         focus = []
     return {
         "focus": [str(item) for item in focus if str(item).strip()],

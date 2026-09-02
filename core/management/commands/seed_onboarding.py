@@ -23,7 +23,6 @@ PROFILE_QUIZ_SCREENS = [
         "kind": "single",
         "field": "gender",
         "title": [{"t": "Укажи свой "}, {"t": "пол", "accent": True}],
-        "columns": 2,
         "options": [
             {"value": "female", "label": "Женский"},
             {"value": "male", "label": "Мужской"},
@@ -34,7 +33,6 @@ PROFILE_QUIZ_SCREENS = [
         "kind": "single",
         "field": "age",
         "title": [{"t": "Сколько тебе "}, {"t": "лет?", "accent": True}],
-        "columns": 2,
         "options": [
             {"value": "18-24", "label": "18–24"},
             {"value": "25-34", "label": "25–34"},
@@ -51,29 +49,62 @@ PROFILE_QUIZ_SCREENS = [
             {"t": "сейчас?", "accent": True},
         ],
         "options": [
-            {"value": "stable", "label": "все довольно стабильно"},
-            {"value": "one-sphere", "label": "меняется одна важная сфера"},
-            {"value": "many-spheres", "label": "перестройки в нескольких сферах жизни"},
-            {"value": "ready-to-change", "label": "чувствую, что пора что-то менять"},
-            {"value": "unclear", "label": "пока не понимаю, что происходит"},
+            {
+                "value": "stable",
+                "label": "В целом всё стабильно",
+                "tip": "Не всему нужен ремонт. Посмотрим, куда направить внимание дальше.",
+            },
+            {
+                "value": "one-sphere",
+                "label": "Меняется одна важная сфера",
+                "tip": "Здесь лучше идти вглубь, а не охватывать всё. Начнём с главного.",
+            },
+            {
+                "value": "many-spheres",
+                "label": "Меняется сразу несколько сфер",
+                "tip": "События могут быть частями одного процесса. Поищем общую нить.",
+            },
+            {
+                "value": "unclear",
+                "label": "Чувствую перемены, но пока не понимаю их",
+                "tip": "Необязательно сразу всё понимать. Начнём с того, что уже ощущается.",
+            },
         ],
     },
     {
         "id": "focus",
-        "kind": "multi",
+        "kind": "single",
         "field": "focus",
         "title": [
-            {"t": "Какая сфера жизни сейчас волнует "},
-            {"t": "больше всего?", "accent": True},
+            {"t": "С чем тебе сейчас важнее всего "},
+            {"t": "разобраться?", "accent": True},
         ],
-        "hint": "Можно выбрать несколько",
         "options": [
-            {"value": "love", "label": "отношения и любовь"},
-            {"value": "money", "label": "деньги и работа"},
-            {"value": "energy", "label": "энергия, ресурсы и восстановление"},
-            {"value": "confidence", "label": "самооценка и уверенность"},
-            {"value": "path", "label": "самореализация и поиск своего пути"},
-            {"value": "other", "label": "другое"},
+            {
+                "value": "love",
+                "label": "Отношения и любовь",
+                "tip": "Не всё решают чувства. Иногда больше говорит сам способ быть рядом.",
+            },
+            {
+                "value": "money",
+                "label": "Работа и деньги",
+                "tip": "Не каждый тупик требует нового плана. Посмотрим, что держит на месте.",
+            },
+            {
+                "value": "energy",
+                "label": "Энергия и восстановление",
+                "tip": "Не вся усталость проходит после отдыха. Посмотрим, куда уходят силы.",
+            },
+            {
+                "value": "confidence",
+                "label": "Уверенность и самооценка",
+                "tip": "Сомнения не всегда про слабость. Иногда дело в чужой мерке.",
+            },
+            {
+                "value": "path",
+                "label": "Самореализация и свой путь",
+                "tip": "Не всякая цель действительно твоя. Отделим своё от чужих ожиданий.",
+            },
         ],
     },
     {
@@ -85,13 +116,31 @@ PROFILE_QUIZ_SCREENS = [
             {"t": "на данный момент?", "accent": True},
         ],
         "options": [
-            {"value": "future", "label": "узнать, что меня ждёт в ближайшем будущем"},
-            {"value": "potential", "label": "понять себя и свой потенциал"},
-            {"value": "uncertainty", "label": "найти выход из неопределённости"},
-            {"value": "relationships", "label": "наладить отношения"},
-            {"value": "patterns", "label": "понять закономерности своей жизни"},
-            {"value": "life-stage", "label": "разобраться в текущем жизненном этапе"},
-            {"value": "other", "label": "другое"},
+            {
+                "value": "life-stage",
+                "label": "Что происходит сейчас",
+                "tip": "Сначала отделим факты от реакции на них. Так станет видна причина.",
+            },
+            {
+                "value": "patterns",
+                "label": "Какие сценарии повторяются",
+                "tip": "Повторение начинается раньше, чем кажется. Посмотрим, где всё запускается.",
+            },
+            {
+                "value": "potential",
+                "label": "В чём мой потенциал",
+                "tip": "Сильная сторона не всегда похожа на талант. Часто она кажется чем-то обычным.",
+            },
+            {
+                "value": "uncertainty",
+                "label": "Куда двигаться дальше",
+                "tip": "Следующий шаг не обязан решать всё сразу. Достаточно, чтобы он вернул движение.",
+            },
+            {
+                "value": "future",
+                "label": "Чего ждать в ближайшее время",
+                "tip": "Точный прогноз начинается не с обещаний. Сначала нужна точка отсчёта.",
+            },
         ],
     },
     {
@@ -99,14 +148,25 @@ PROFILE_QUIZ_SCREENS = [
         "kind": "single",
         "field": "chart_knowledge",
         "title": [
-            {"t": "Что ты уже знаешь про "},
-            {"t": "свою карту?", "accent": True},
+            {"t": "Что ты знаешь о "},
+            {"t": "своей карте?", "accent": True},
         ],
         "options": [
-            {"value": "sun-only", "label": "Только знак зодиака"},
-            {"value": "big-three", "label": "Знак, луна или асцендент"},
-            {"value": "natal-chart", "label": "Читаю свою натальную карту"},
-            {"value": "transits", "label": "Разбираюсь в транзитах"},
+            {
+                "value": "sun-only",
+                "label": "Знаю только свой знак",
+                "tip": "Начинать со словаря не придётся. Объясним карту через знакомые ситуации.",
+            },
+            {
+                "value": "big-three",
+                "label": "Знаю Солнце, Луну и асцендент",
+                "tip": "База уже есть. Покажем связи между отдельными положениями.",
+            },
+            {
+                "value": "transits",
+                "label": "Читаю карту и слежу за транзитами",
+                "tip": "Можно идти глубже. Покажем логику аспектов и текущих влияний.",
+            },
         ],
     },
     {
@@ -118,11 +178,31 @@ PROFILE_QUIZ_SCREENS = [
             {"t": "к астрологии?", "accent": True},
         ],
         "options": [
-            {"value": "understand-self", "label": "Хочу понять, что со мной происходит"},
-            {"value": "person", "label": "Не складывается с конкретным человеком"},
-            {"value": "decision", "label": "Нужно принять решение"},
-            {"value": "check-feelings", "label": "Хочу проверить свои ощущения"},
-            {"value": "curious", "label": "Просто интересно"},
+            {
+                "value": "understand-self",
+                "label": "Хочу понять своё состояние",
+                "tip": "Назвать чувство бывает мало. Ясность приходит, когда видна его причина.",
+            },
+            {
+                "value": "person",
+                "label": "Думаю о конкретном человеке",
+                "tip": "В чужих поступках легко потерять себя. Вернём свою точку зрения в центр.",
+            },
+            {
+                "value": "decision",
+                "label": "Стою перед важным выбором",
+                "tip": "Ещё одно мнение редко решает выбор. Нужен собственный критерий.",
+            },
+            {
+                "value": "check-feelings",
+                "label": "Хочу свериться с собой",
+                "tip": "Иногда ответ уже есть. Проверим, почему ему пока трудно доверять.",
+            },
+            {
+                "value": "curious",
+                "label": "Мне просто интересно",
+                "tip": "Не каждому поиску нужна проблема. Иногда интерес сам открывает важное.",
+            },
         ],
     },
 ]
@@ -170,6 +250,21 @@ def _build_default_steps():
             }
         )
         order += 10
+
+    steps.append(
+        {
+            "slug": "understood",
+            "title": "Что мы уже поняли",
+            "subtitle": "",
+            "step_type": OnboardingStep.StepType.CONTENT,
+            "order": order,
+            "is_required": True,
+            "is_active": True,
+            "fields_schema": {},
+            "meta": {"ui": "synthesis"},
+        }
+    )
+    order += 10
 
     steps.append(
         {
@@ -238,6 +333,40 @@ def _rename_slug(old: str, new: str) -> str | None:
     return None
 
 
+def _backfill_understood_for_later_steps() -> int:
+    """Sessions that already passed birth should not resume on the new screen."""
+    understood = OnboardingStep.objects.filter(slug="understood").first()
+    if understood is None:
+        return 0
+    later_session_ids = set(
+        OnboardingStepAnswer.objects.filter(
+            step__slug__in=("birth", "contacts"),
+            completed=True,
+        ).values_list("session_id", flat=True)
+    )
+    existing = set(
+        OnboardingStepAnswer.objects.filter(step=understood).values_list(
+            "session_id", flat=True
+        )
+    )
+    missing = later_session_ids - existing
+    if not missing:
+        return 0
+    OnboardingStepAnswer.objects.bulk_create(
+        [
+            OnboardingStepAnswer(
+                session_id=session_id,
+                step=understood,
+                payload={"acknowledged": True},
+                completed=True,
+            )
+            for session_id in missing
+        ],
+        ignore_conflicts=True,
+    )
+    return len(missing)
+
+
 class Command(BaseCommand):
     help = "Создаёт/обновляет шаги онбординга (каждый экран — отдельный URL)"
 
@@ -272,5 +401,9 @@ class Command(BaseCommand):
             n = OnboardingStep.objects.filter(slug=slug, is_active=True).update(is_active=False)
             if n:
                 self.stdout.write(f"  - deactivated /onboarding/{slug}/")
+
+        backfilled = _backfill_understood_for_later_steps()
+        if backfilled:
+            self.stdout.write(f"  ~ backfilled understood for {backfilled} session(s)")
 
         self.stdout.write(self.style.SUCCESS(f"Готово: создано {created}, обновлено {updated}"))
