@@ -3228,6 +3228,18 @@ class YandexAuthTests(TestCase):
         redirect = parse_qs(urlparse(response.json()["url"]).query)["redirect_uri"][0]
         self.assertEqual(redirect, "http://localhost:3000/onboarding/contacts")
 
+    def test_start_accepts_production_www_redirect(self):
+        response = self.client.get(
+            "/api/auth/yandex/start/",
+            {
+                "session_token": str(self.session.token),
+                "redirect_uri": "https://www.cosmirror.ru/onboarding/contacts/",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        redirect = parse_qs(urlparse(response.json()["url"]).query)["redirect_uri"][0]
+        self.assertEqual(redirect, "https://www.cosmirror.ru/onboarding/contacts")
+
     @patch("core.services.yandex_oauth._get_json")
     @patch("core.services.yandex_oauth._post_form")
     def test_callback_creates_user_and_attaches_session(self, post_form, get_json):

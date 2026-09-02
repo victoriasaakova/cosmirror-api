@@ -102,6 +102,8 @@ def _allowed_redirect_hosts() -> set[str]:
             "127.0.0.1:3000",
             "localhost:8000",
             "127.0.0.1:8000",
+            "cosmirror.ru",
+            "www.cosmirror.ru",
         }
     )
     return hosts
