@@ -278,7 +278,10 @@ class AuthDevLoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         user = get_or_create_dev_user()
-        _orders_for_user(user).delete()
+        # Купленный отчёт: не стираем заказ — LLM-слои уже в interpretive.
+        # Остальные persona сбрасывают заказы, чтобы кабинет был пустой/бесплатный.
+        if persona != "report":
+            _orders_for_user(user).delete()
         session_token = ""
         if persona == "report":
             from core.services.dev_fixtures import seed_dev_paid_report
@@ -819,6 +822,57 @@ class MeReportView(APIView):
             kickoff_paid_report_for_order(order, retry_failed=False)
             order.refresh_from_db()
         return Response(OrderSerializer(order).data)
+
+
+class MeChartShareView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [BearerTokenAuthentication]
+
+    def post(self, request):
+        from core.services.chart_share import ChartShareError, ensure_chart_share
+
+        order = _latest_order_for(request.user)
+        if order is None:
+            return Response({"detail": "Нет заказа."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            payload = ensure_chart_share(order)
+        except ChartShareError as exc:
+            return Response({"detail": exc.detail}, status=exc.status)
+        return Response({"url": payload["url"]})
+
+    def delete(self, request):
+        from core.services.chart_share import revoke_chart_share
+
+        order = _latest_order_for(request.user)
+        if order is None:
+            return Response({"detail": "Нет заказа."}, status=status.HTTP_404_NOT_FOUND)
+        revoke_chart_share(order)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PublicChartShareView(APIView):
+    """Публичный снимок карты. Токен не является UUID заказа и не требует сессии."""
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes: list = []
+
+    def get(self, request, token: str):
+        from core.services.chart_share import (
+            internal_share_authorized,
+            lookup_share,
+            public_share_payload,
+        )
+
+        if not internal_share_authorized(request):
+            return Response({"detail": "Ссылка недоступна."}, status=status.HTTP_404_NOT_FOUND)
+        share = lookup_share(token)
+        if share is None:
+            return Response({"detail": "Ссылка недоступна."}, status=status.HTTP_404_NOT_FOUND)
+        response = Response(public_share_payload(share.order))
+        response["Cache-Control"] = "private, no-store"
+        response["Referrer-Policy"] = "no-referrer"
+        response["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+        return response
 
 
 class MeCabinetView(APIView):

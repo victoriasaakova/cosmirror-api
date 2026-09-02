@@ -215,3 +215,9 @@ EMAIL_BACKEND = os.getenv(
     if EMAIL_HOST_PASSWORD or RESEND_API_KEY
     else "django.core.mail.backends.console.EmailBackend",
 )
+
+# Server-to-server key for GET /api/share/<token>/. Browser must not receive JSON.
+_DEV_SHARE_INTERNAL_KEY = "cosmirror-dev-share-internal"
+SHARE_INTERNAL_KEY = (os.getenv("SHARE_INTERNAL_KEY") or "").strip() or (
+    _DEV_SHARE_INTERNAL_KEY if DEBUG else ""
+)

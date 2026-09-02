@@ -11,6 +11,7 @@ from rest_framework.test import APIClient
 
 from core.models import (
     AuthToken,
+    ChartShare,
     NatalChart,
     OnboardingSession,
     OnboardingStep,
@@ -3600,6 +3601,46 @@ class YandexAuthTests(TestCase):
         self.assertNotIn("customer_email", payload)
 
     @override_settings(DEBUG=True)
+    def test_dev_login_report_reuses_sealed_layers(self):
+        from core.services.yandex_oauth import get_or_create_dev_user
+
+        first = self.client.post(
+            "/api/auth/dev-login/",
+            {"persona": "report"},
+            format="json",
+        )
+        self.assertEqual(first.status_code, 200)
+        user = get_or_create_dev_user()
+        order = Order.objects.filter(user=user, status=Order.Status.PAID).get()
+        sealed = {
+            "generation": {"status": "done"},
+            "natal": {
+                "source": "llm",
+                "status": "ready",
+                "payload": {"core_portrait": {"headline": "Sealed"}},
+            },
+            "aspects": {"source": "llm", "status": "ready"},
+            "cycles": {"source": "llm", "status": "ready"},
+            "request": {"source": "llm", "status": "ready"},
+            "practice": {"source": "llm", "status": "ready"},
+        }
+        order.interpretive = sealed
+        order.save(update_fields=["interpretive", "updated_at"])
+        public_id = order.public_id
+
+        second = self.client.post(
+            "/api/auth/dev-login/",
+            {"persona": "report"},
+            format="json",
+        )
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(Order.objects.filter(user=user, status=Order.Status.PAID).count(), 1)
+        order.refresh_from_db()
+        self.assertEqual(order.public_id, public_id)
+        self.assertEqual(order.interpretive["natal"]["payload"]["core_portrait"]["headline"], "Sealed")
+        self.assertEqual(order.interpretive["generation"]["status"], "done")
+
+    @override_settings(DEBUG=True)
     def test_dev_login_seeds_insight_funnel(self):
         response = self.client.post(
             "/api/auth/dev-login/",
@@ -3878,6 +3919,29 @@ class ReportSectionFeedbackApiTests(TestCase):
         self.assertEqual(rows[0]["rating"], "partial")
         self.assertEqual(rows[0]["comment"], "Совпало про Луну.")
 
+    def test_sections_are_independent(self):
+        natal = self._post({"section": "natal", "rating": "about_me", "comment": "про Солнце"})
+        aspects = self._post({"section": "aspects", "rating": "not_about_me"})
+        cycles = self._post(
+            {"section": "cycles", "rating": "partial", "comment": "часть про Сатурн"}
+        )
+        self.assertEqual(natal.status_code, 200, natal.content)
+        self.assertEqual(aspects.status_code, 200, aspects.content)
+        self.assertEqual(cycles.status_code, 200, cycles.content)
+        self.assertEqual(ReportSectionFeedback.objects.filter(order=self.order).count(), 3)
+
+        report = self.client.get(
+            "/api/me/report/",
+            HTTP_AUTHORIZATION=f"Bearer {self.auth_key}",
+        )
+        rows = {item["section"]: item for item in report.json()["section_feedback"]}
+        self.assertEqual(rows["natal"]["rating"], "about_me")
+        self.assertEqual(rows["natal"]["comment"], "про Солнце")
+        self.assertEqual(rows["aspects"]["rating"], "not_about_me")
+        self.assertEqual(rows["aspects"]["comment"], "")
+        self.assertEqual(rows["cycles"]["rating"], "partial")
+        self.assertEqual(rows["cycles"]["comment"], "часть про Сатурн")
+
     def test_skip_comment_clears_text(self):
         self._post({"section": "cycles", "rating": "about_me", "comment": "уже не нужно"})
         later = self._post(
@@ -4081,6 +4145,197 @@ class LlmRateLimitTests(TestCase):
         self.assertTrue(should_schedule_personalization(insight))
         insight["personalize_attempts"] = 3
         self.assertFalse(should_schedule_personalization(insight))
+
+
+def _leaky_paid_report():
+    return {
+        "title": "Персональный астрологический отчёт",
+        "person": {
+            "name": "Вика",
+            "birth_date": "1993-08-21",
+            "birth_time": "09:45",
+            "birth_place": "Москва",
+            "has_birth_time": True,
+        },
+        "document": {
+            "quiz": {"name": "Вика", "focus": ["work"]},
+            "generation": {"payload": {"system_prompt": "SECRET_PROMPT"}, "status": "done"},
+            "factual": {
+                "natal": {
+                    "has_birth_time": True,
+                    "location": {"place": "Москва", "lat": 55.75, "lng": 37.61},
+                    "points": [
+                        {
+                            "key": "sun",
+                            "name": "Солнце",
+                            "sign": "leo",
+                            "sign_ru": "Лев",
+                            "fact": "Солнце в Льве",
+                            "degree": 28,
+                            "house": 10,
+                        }
+                    ],
+                    "houses": [{"house": 1, "sign_ru": "Скорпион", "theme": "я"}],
+                    "aspects": [
+                        {
+                            "a": "sun",
+                            "b": "moon",
+                            "a_name": "Солнце",
+                            "b_name": "Луна",
+                            "aspect_ru": "квадрат",
+                            "orb": 2,
+                            "theme": "",
+                        }
+                    ],
+                    "wheel": {
+                        "ascendant_longitude": 215.0,
+                        "planets": [{"key": "sun", "name": "Солнце", "longitude": 148.1}],
+                    },
+                }
+            },
+            "interpretive": {
+                "natal": {
+                    "source": "llm",
+                    "model": "hidden-model",
+                    "can_generate": True,
+                    "payload": {
+                        "core_portrait": {"headline": "Портрет", "summary": "x" * 50}
+                    },
+                },
+                "aspects": {"payload": {"intro": {"headline": "secret aspects"}}},
+                "request": {"payload": {"request": {"text": "мой запрос"}}},
+                "practice": {"payload": {"start_here": {"text": "практика"}}},
+                "cycles": {"payload": {"period_overview": {"headline": "циклы"}}},
+            },
+        },
+        "sections": [{"id": "request", "title": "Запрос"}],
+        "disclaimer": "Расчёт — Swiss Ephemeris, тропический зодиак, дома Плацидуса.",
+    }
+
+
+def _walk_strings(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield key
+            yield from _walk_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_strings(item)
+    elif isinstance(value, str):
+        yield value
+
+
+@override_settings(FRONTEND_URL="https://cosmirror.ru", SHARE_INTERNAL_KEY="test-share-internal")
+class ChartShareTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user, self.auth_key = _make_user(email="share@example.com", yandex_id="8801")
+        lead = WaitlistLead.objects.create(email="share@example.com", user=self.user)
+        session = OnboardingSession.objects.create(
+            waitlist_lead=lead,
+            user=self.user,
+            birth_date=date(1993, 8, 21),
+            birth_place="Москва",
+        )
+        self.order = Order.objects.create(
+            idempotency_key="share-key-0001",
+            idempotency_request_hash="e" * 64,
+            session=session,
+            waitlist_lead=lead,
+            user=self.user,
+            customer_email="share@example.com",
+            product_sku="personal_report",
+            product_name="Персональный разбор Cosmirror",
+            amount=Decimal("777.00"),
+            status=Order.Status.PAID,
+        )
+
+    def _auth(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.auth_key}"}
+
+    @patch("core.services.chart_share.public_paid_report", side_effect=lambda order: _leaky_paid_report())
+    def test_public_payload_strips_pii_and_other_layers(self, _mocked):
+        from core.services.chart_share import public_share_payload
+
+        payload = public_share_payload(self.order)
+        blob = " ".join(_walk_strings(payload))
+        self.assertNotIn("share@example.com", blob)
+        self.assertNotIn("Вика", blob)
+        self.assertNotIn("1993-08-21", blob)
+        self.assertNotIn("Москва", blob)
+        self.assertNotIn("SECRET_PROMPT", blob)
+        self.assertNotIn("hidden-model", blob)
+        self.assertNotIn("мой запрос", blob)
+        self.assertNotIn("secret aspects", blob)
+        self.assertNotIn(str(self.order.public_id), blob)
+        self.assertNotIn("Swiss Ephemeris", blob)
+        self.assertNotIn("person", payload)
+        self.assertNotIn("quiz", payload.get("document") or {})
+        natal = payload["document"]["factual"]["natal"]
+        self.assertTrue(natal["wheel"]["planets"])
+        self.assertEqual(natal["points"][0]["sign_ru"], "Лев")
+        self.assertEqual(
+            payload["document"]["interpretive"]["natal"]["payload"]["core_portrait"]["headline"],
+            "Портрет",
+        )
+        self.assertNotIn("aspects", payload["document"]["interpretive"])
+        self.assertNotIn("request", payload["document"]["interpretive"])
+        self.assertNotIn("can_generate", payload["document"]["interpretive"]["natal"])
+
+    @patch("core.services.chart_share.public_paid_report", side_effect=lambda order: _leaky_paid_report())
+    def test_owner_gets_opaque_url_not_order_uuid(self, _mocked):
+        created = self.client.post("/api/me/report/share/", {}, format="json", **self._auth())
+        self.assertEqual(created.status_code, 200, created.content)
+        url = created.json()["url"]
+        self.assertTrue(url.startswith("https://cosmirror.ru/s/"))
+        self.assertNotIn(str(self.order.public_id), url)
+        token = url.rstrip("/").rsplit("/", 1)[-1]
+        self.assertGreaterEqual(len(token), 32)
+        self.assertNotRegex(
+            token,
+            r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+        )
+        share = ChartShare.objects.get(order=self.order)
+        self.assertNotEqual(share.token_hash, token)
+        self.assertNotIn(token, share.token_hash)
+        again = self.client.post("/api/me/report/share/", {}, format="json", **self._auth())
+        self.assertEqual(again.json()["url"], url)
+
+    @patch("core.services.chart_share.public_paid_report", side_effect=lambda order: _leaky_paid_report())
+    def test_public_get_does_not_accept_order_uuid_or_auth(self, _mocked):
+        created = self.client.post("/api/me/report/share/", {}, format="json", **self._auth())
+        token = created.json()["url"].rstrip("/").rsplit("/", 1)[-1]
+        internal = {"HTTP_X_COSMIRROR_SHARE": "test-share-internal"}
+
+        bare = self.client.get(f"/api/share/{token}/")
+        self.assertEqual(bare.status_code, 404)
+        wrong = self.client.get(f"/api/share/{token}/", HTTP_X_COSMIRROR_SHARE="nope")
+        self.assertEqual(wrong.status_code, 404)
+
+        public = self.client.get(f"/api/share/{token}/", **internal)
+        self.assertEqual(public.status_code, 200, public.content)
+        self.assertEqual(public["Cache-Control"], "private, no-store")
+        self.assertNotIn("person", public.json())
+        self.assertTrue(public.json()["document"]["factual"]["natal"]["wheel"]["planets"])
+
+        uuid_hit = self.client.get(f"/api/share/{self.order.public_id}/", **internal)
+        self.assertEqual(uuid_hit.status_code, 404)
+
+        order_by_token = self.client.get(f"/api/orders/{token}/")
+        self.assertIn(order_by_token.status_code, (401, 403, 404))
+
+        self.client.delete("/api/me/report/share/", **self._auth())
+        gone = self.client.get(f"/api/share/{token}/", **internal)
+        self.assertEqual(gone.status_code, 404)
+
+    def test_share_requires_owner_and_paid_order(self):
+        self.order.status = Order.Status.AWAITING_PAYMENT
+        self.order.save(update_fields=["status"])
+        unpaid = self.client.post("/api/me/report/share/", {}, format="json", **self._auth())
+        self.assertEqual(unpaid.status_code, 403)
+
+        anon = self.client.post("/api/me/report/share/", {}, format="json")
+        self.assertEqual(anon.status_code, 401)
 
 
 

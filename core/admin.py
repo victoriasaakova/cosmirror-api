@@ -3,6 +3,7 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 
 from .models import (
+    ChartShare,
     GlobalPlanetaryCycle,
     JournalEntry,
     NatalChart,
@@ -164,6 +165,8 @@ class ReportSectionFeedbackInline(admin.TabularInline):
     fields = ("section", "rating", "comment", "comment_skipped", "updated_at")
     readonly_fields = ("updated_at",)
     show_change_link = True
+    verbose_name = "Фидбэк раздела"
+    verbose_name_plural = "Фидбэк по разделам — каждый раздел отдельно"
 
 
 @admin.register(ReportSectionFeedback)
@@ -187,6 +190,9 @@ class ReportSectionFeedbackAdmin(admin.ModelAdmin):
     )
     readonly_fields = ("created_at", "updated_at")
     list_select_related = ("order", "user")
+    autocomplete_fields = ("order", "user")
+    date_hierarchy = "created_at"
+    ordering = ("-updated_at",)
 
     @admin.display(description="Комментарий")
     def short_comment(self, obj: ReportSectionFeedback) -> str:
@@ -194,6 +200,19 @@ class ReportSectionFeedbackAdmin(admin.ModelAdmin):
         if not text:
             return "—"
         return text if len(text) <= 80 else f"{text[:77]}…"
+
+
+@admin.register(ChartShare)
+class ChartShareAdmin(admin.ModelAdmin):
+    list_display = ("token_prefix", "order", "user", "created_at", "revoked_at")
+    list_filter = ("created_at",)
+    search_fields = ("token_hash", "order__public_id", "user__email")
+    readonly_fields = ("token_hash", "token_sealed", "created_at")
+    raw_id_fields = ("order", "user")
+
+    @admin.display(description="Токен")
+    def token_prefix(self, obj: ChartShare) -> str:
+        return f"{obj.token_hash[:8]}…"
 
 
 @admin.register(Order)

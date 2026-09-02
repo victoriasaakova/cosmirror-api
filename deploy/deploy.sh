@@ -27,6 +27,31 @@ fi
 
 git reset --hard origin/main
 
+echo "==> Share internal key"
+SHARE_KEY_FILE="${SHARE_KEY_FILE:-/opt/cosmirror/share-internal.key}"
+mkdir -p "$(dirname "$SHARE_KEY_FILE")"
+if [[ ! -f "$SHARE_KEY_FILE" ]]; then
+  tmp="$(mktemp "${SHARE_KEY_FILE}.XXXXXX")"
+  python3 -c 'import secrets; print(secrets.token_urlsafe(48))' > "$tmp"
+  chmod 600 "$tmp"
+  ln "$tmp" "$SHARE_KEY_FILE" 2>/dev/null || true
+  rm -f "$tmp"
+fi
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [[ -s "$SHARE_KEY_FILE" ]] && break
+  sleep 0.5
+done
+SHARE_INTERNAL_KEY="$(tr -d '[:space:]' < "$SHARE_KEY_FILE")"
+if [[ -z "$SHARE_INTERNAL_KEY" ]]; then
+  echo "ERROR: missing $SHARE_KEY_FILE"
+  exit 1
+fi
+ENV_FILE="$APP_DIR/.env"
+touch "$ENV_FILE"
+if ! grep -q "^SHARE_INTERNAL_KEY=" "$ENV_FILE"; then
+  printf 'SHARE_INTERNAL_KEY=%s\n' "$SHARE_INTERNAL_KEY" >> "$ENV_FILE"
+fi
+
 echo "==> Installing dependencies"
 python3 -m venv .venv
 # shellcheck disable=SC1091

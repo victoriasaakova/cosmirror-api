@@ -480,6 +480,42 @@ class Order(models.Model):
         return f"{self.public_id} ({self.status})"
 
 
+class ChartShare(models.Model):
+    """
+    Публичная ссылка на карту.
+
+    В URL — случайный capability-токен (не UUID заказа и не user id).
+    В базе — SHA-256 токена для поиска и зашифрованная копия для повторной
+    выдачи владельцу. Сам токен не является ключом к /api/orders/.
+    """
+
+    token_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    token_sealed = models.CharField(max_length=255)
+    order = models.OneToOneField(
+        Order,
+        on_delete=models.CASCADE,
+        related_name="chart_share",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="chart_shares",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Публичная ссылка на карту"
+        verbose_name_plural = "Публичные ссылки на карту"
+
+    def __str__(self) -> str:
+        return f"{self.token_hash[:8]}… ({self.order_id})"
+
+    @property
+    def is_active(self) -> bool:
+        return self.revoked_at is None
+
+
 class AuthToken(models.Model):
     """Сессия входа после Яндекс ID. Ключ уходит на фронт как Bearer-токен."""
 
@@ -547,9 +583,9 @@ class ReportSectionFeedback(models.Model):
         PRACTICE = "practice", "Практика"
 
     class Rating(models.TextChoices):
-        ABOUT_ME = "about_me", "Про меня"
-        PARTIAL = "partial", "Частично"
-        NOT_ABOUT_ME = "not_about_me", "Не про меня"
+        ABOUT_ME = "about_me", "🌝 Про меня"
+        PARTIAL = "partial", "🌗 Частично"
+        NOT_ABOUT_ME = "not_about_me", "🌚 Не про меня"
 
     order = models.ForeignKey(
         Order,
@@ -566,7 +602,7 @@ class ReportSectionFeedback(models.Model):
     section = models.CharField("Раздел", max_length=16, choices=Section.choices)
     rating = models.CharField("Оценка", max_length=16, choices=Rating.choices)
     comment = models.TextField("Комментарий", blank=True)
-    comment_skipped = models.BooleanField("Комментарий отложен", default=False)
+    comment_skipped = models.BooleanField("Отправлено без комментария", default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -8,6 +8,7 @@ from decimal import Decimal
 
 from django.core.management import call_command
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from core.models import (
@@ -47,7 +48,20 @@ DEV_REPORT_QUIZ = {
 
 
 def seed_dev_paid_report(user) -> Order:
-    """Сессия + натал + оплаченный заказ, чтобы кабинет сразу открыл отчёт."""
+    """Сессия + натал + оплаченный заказ, чтобы кабинет сразу открыл отчёт.
+
+    Повторный вход не создаёт новый заказ: уже сгенерированные LLM-слои
+    остаются на месте, пока явно не сотрут демо через /dev/.
+    """
+    existing = (
+        Order.objects.filter(Q(user=user) | Q(session__user=user), status=Order.Status.PAID)
+        .select_related("session")
+        .order_by("-paid_at", "-created_at")
+        .first()
+    )
+    if existing is not None:
+        _sync_dev_profile(user, onboarding_completed=True)
+        return existing
     session = _seed_dev_session(user, completed=True)
     lead = session.waitlist_lead
     if lead is None:
@@ -207,9 +221,13 @@ def _store_chart(user, session: OnboardingSession) -> NatalChart:
 
 def _create_paid_order(user, session: OnboardingSession, lead: WaitlistLead) -> Order:
     sku, name, amount = _product()
+    key = f"dev-report-{user.pk}"
+    existing = Order.objects.filter(idempotency_key=key).first()
+    if existing is not None:
+        return existing
     now = timezone.now()
     return Order.objects.create(
-        idempotency_key=f"dev-report-{user.pk}",
+        idempotency_key=key,
         idempotency_request_hash=_request_hash(str(session.token), sku, ""),
         session=session,
         waitlist_lead=lead,

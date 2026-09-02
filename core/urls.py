@@ -20,6 +20,8 @@ urlpatterns = [
     path("auth/dev-login/", views.AuthDevLoginView.as_view(), name="auth-dev-login"),
     path("me/dev-reset/", views.MeDevResetView.as_view(), name="me-dev-reset"),
     path("me/report/", views.MeReportView.as_view(), name="me-report"),
+    path("me/report/share/", views.MeChartShareView.as_view(), name="me-report-share"),
+    path("share/<str:token>/", views.PublicChartShareView.as_view(), name="public-chart-share"),
     path("me/cabinet/", views.MeCabinetView.as_view(), name="me-cabinet"),
     path(
         "me/cabinet/locked-preview/<slug:section>/",
