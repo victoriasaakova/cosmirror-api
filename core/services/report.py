@@ -182,6 +182,19 @@ def paid_report_for_pdf(order: Order) -> dict[str, Any]:
 def public_paid_report(order: Order) -> dict[str, Any]:
     """Отчёт для кабинета: без ФИО, почты и внутренних payload. Дата рождения нужна шапке карты."""
     report = build_paid_report(order)
+    live = natal_from_user(order.user) if order.user_id else {}
+    if not live.get("planets"):
+        live = natal_from_session(order.session)
+    if live.get("planets"):
+        from core.services.report_facts import chart_wheel, natal_aspects, natal_table
+
+        hits = natal_aspects(live)
+        report["home_natal"] = {
+            "points": natal_table(live),
+            "wheel": chart_wheel(live, hits),
+            "has_birth_time": bool(live.get("has_birth_time")),
+        }
+        report["person"] = _person_block(order, live)
     document = report.get("document")
     if isinstance(document, dict):
         quiz = document.get("quiz")
@@ -408,7 +421,11 @@ def _stored_natal(order: Order) -> dict[str, Any]:
 
 
 def _natal_for(order: Order) -> dict[str, Any]:
-    """Пересчитываем Плацидус из данных рождения, чтобы старые whole-sign карты не залипали."""
+    """Натал разбора: после правки данных в кабинете — снимок покупки, не живая карта."""
+    store = order.interpretive if isinstance(order.interpretive, dict) else {}
+    sealed = store.get("sealed_natal")
+    if isinstance(sealed, dict) and sealed.get("planets"):
+        return sealed
     return natal_from_session(order.session)
 
 

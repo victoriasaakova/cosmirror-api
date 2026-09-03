@@ -1,4 +1,4 @@
-"""Кабинет: данные рождения, пересчёт карты, удаление аккаунта."""
+"""Кабинет: данные рождения, пересчёт карты на главной, удаление аккаунта."""
 
 from __future__ import annotations
 
@@ -160,17 +160,33 @@ def birth_snapshot(user: User) -> dict[str, Any]:
     }
 
 
-def _invalidate_paid_reports(user: User) -> None:
-    from core.services.report_jobs import kickoff_paid_report_for_order
+SEALED_NATAL_KEY = "sealed_natal"
 
+
+def _freeze_paid_natal(user: User, chart: Optional[NatalChart]) -> None:
+    """Платный разбор остаётся на натале покупки. Новая карта — только на главной."""
+    natal: dict[str, Any] = {}
+    if chart and isinstance(chart.chart_data, dict) and chart.chart_data.get("planets"):
+        natal = dict(chart.chart_data)
+    else:
+        from core.services.report import natal_from_session
+
+        session = _latest_session(user)
+        natal = natal_from_session(session) if session else {}
+    if not natal.get("planets"):
+        return
     orders = Order.objects.filter(
         Q(user=user) | Q(session__user=user),
         status=Order.Status.PAID,
     )
     for order in orders:
-        order.interpretive = {}
+        store = dict(order.interpretive) if isinstance(order.interpretive, dict) else {}
+        existing = store.get(SEALED_NATAL_KEY)
+        if isinstance(existing, dict) and existing.get("planets"):
+            continue
+        store[SEALED_NATAL_KEY] = natal
+        order.interpretive = store
         order.save(update_fields=["interpretive", "updated_at"])
-        kickoff_paid_report_for_order(order, retry_failed=True)
 
 
 @transaction.atomic
@@ -216,6 +232,8 @@ def update_user_birth(user: User, payload: dict[str, Any]) -> dict[str, Any]:
         "status": NatalChart.Status.PENDING,
         "error_message": "",
     }
+    _freeze_paid_natal(user, chart)
+
     if chart is None:
         chart = NatalChart(session=session, **fields)
     else:
@@ -271,7 +289,6 @@ def update_user_birth(user: User, payload: dict[str, Any]) -> dict[str, Any]:
             ]
         )
 
-    _invalidate_paid_reports(user)
     return birth_snapshot(user)
 
 

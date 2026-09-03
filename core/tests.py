@@ -3768,7 +3768,8 @@ class AccountCabinetTests(TestCase):
         self.assertEqual(data["profile"]["birth_date"], "1993-08-21")
 
     @patch("core.services.account.calculate_and_store_chart", side_effect=_fake_store_chart)
-    def test_patch_birth_updates_profile_and_clears_report_layers(self, _mocked):
+    @patch("core.services.report_jobs.kickoff_paid_report_for_order")
+    def test_patch_birth_updates_chart_and_keeps_report_layers(self, kickoff, _mocked):
         user, key = _make_user(email="anna@yandex.ru", yandex_id="7702")
         session = OnboardingSession.objects.create(
             user=user,
@@ -3776,6 +3777,16 @@ class AccountCabinetTests(TestCase):
             birth_time=time(9, 45),
             birth_place="Москва",
         )
+        NatalChart.objects.create(
+            user=user,
+            session=session,
+            birth_date=date(1993, 8, 21),
+            birth_time=time(9, 45),
+            birth_place="Москва",
+            status=NatalChart.Status.READY,
+            chart_data={"planets": {"sun": {"sign": "virgo"}}, "has_birth_time": True},
+        )
+        interpretive = {"natal": {"source": "llm"}, "generation": {"status": "done"}}
         order = Order.objects.create(
             idempotency_key="birth-edit-1",
             idempotency_request_hash="e" * 64,
@@ -3786,7 +3797,7 @@ class AccountCabinetTests(TestCase):
             product_name="Персональный разбор Cosmirror",
             amount=Decimal("777.00"),
             status=Order.Status.PAID,
-            interpretive={"natal": {"source": "llm"}, "generation": {"status": "done"}},
+            interpretive=interpretive,
         )
         response = self.client.patch(
             "/api/me/birth/",
@@ -3812,7 +3823,13 @@ class AccountCabinetTests(TestCase):
         self.assertEqual(user.profile.birth_date, date(1995, 5, 26))
         self.assertEqual(session.birth_date, date(1995, 5, 26))
         self.assertEqual(session.birth_time, time(19, 25))
-        self.assertEqual(order.interpretive, {})
+        self.assertEqual(order.interpretive.get("natal"), {"source": "llm"})
+        self.assertEqual(order.interpretive.get("generation"), {"status": "done"})
+        self.assertEqual(
+            (order.interpretive.get("sealed_natal") or {}).get("planets"),
+            {"sun": {"sign": "virgo"}},
+        )
+        kickoff.assert_not_called()
 
     @patch("core.services.account.calculate_and_store_chart", side_effect=_fake_store_chart)
     def test_patch_birth_can_clear_time(self, _mocked):
