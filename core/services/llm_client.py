@@ -30,6 +30,34 @@ class LLMError(Exception):
     """LLM call failed or returned unusable content."""
 
 
+def _format_provider_error(exc: BaseException) -> str:
+    """Human-readable upstream failure (Polza / Groq / OpenAI-compatible body)."""
+    parts: list[str] = [type(exc).__name__]
+    status = getattr(exc, "status_code", None)
+    if status is not None:
+        parts.append(f"status={status}")
+
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            for key in ("message", "code", "type"):
+                text = str(err.get(key) or "").strip()
+                if text:
+                    parts.append(text[:240])
+                    break
+        else:
+            text = str(body.get("message") or "").strip()
+            if text:
+                parts.append(text[:240])
+
+    message = str(exc).strip()
+    if message and message not in parts and message != type(exc).__name__:
+        parts.append(message[:240])
+
+    return " | ".join(parts)
+
+
 def is_configured() -> bool:
     return active_provider() is not None
 
@@ -131,8 +159,9 @@ def _polza_chat_json(
             ],
         )
     except Exception as exc:
-        logger.warning("Polza API request failed: %s", type(exc).__name__)
-        raise LLMError(f"Polza request failed: {type(exc).__name__}") from exc
+        detail = _format_provider_error(exc)
+        logger.warning("Polza API request failed: %s", detail)
+        raise LLMError(f"Polza request failed: {detail}") from exc
 
     content = ""
     try:

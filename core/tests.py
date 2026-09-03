@@ -1496,6 +1496,17 @@ class LlmProviderOffTests(TestCase):
         self.assertIsNone(active_provider())
         self.assertFalse(is_configured())
 
+    def test_format_provider_error_extracts_polza_body(self):
+        from core.services.llm_client import _format_provider_error
+
+        class FakeStatusError(Exception):
+            status_code = 503
+            body = {"error": {"message": "provider error", "code": "provider_error"}}
+
+        detail = _format_provider_error(FakeStatusError("upstream"))
+        self.assertIn("status=503", detail)
+        self.assertIn("provider error", detail)
+
 
 class PaidReportLlmFirstOverlayTests(TestCase):
     """LLM-first GET overlay: sealed source=llm always wins; provider only gates new calls."""
