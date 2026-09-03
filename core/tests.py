@@ -1008,7 +1008,7 @@ class PaidReportTests(TestCase):
         self.order.save(update_fields=["status"])
         self.assertTrue(should_start_generation(self.order, retry_failed=False))
         self.order.interpretive = {"generation": {"status": "done"}}
-        self.assertFalse(should_start_generation(self.order, retry_failed=False))
+        self.assertTrue(should_start_generation(self.order, retry_failed=False))
         self.assertTrue(should_start_generation(self.order, retry_failed=True))
 
     @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
@@ -1025,6 +1025,25 @@ class PaidReportTests(TestCase):
         self.order.save(update_fields=["status", "interpretive"])
         self.assertFalse(should_start_generation(self.order, retry_failed=False))
         self.assertTrue(should_start_generation(self.order, retry_failed=True))
+
+    @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
+    def test_should_restart_when_job_done_but_cycles_not_llm(self, _configured):
+        from core.services.report_jobs import should_start_generation
+
+        self.order.status = Order.Status.PAID
+        self.order.interpretive = {
+            "generation": {"status": "done"},
+            "natal": {"source": "llm", "status": "ready"},
+            "aspects": {"source": "llm", "status": "ready"},
+            "cycles": {
+                "source": "fallback",
+                "status": "ready",
+                "generation_status": "generation_failed",
+                "error": "invalid_llm_payload",
+            },
+        }
+        self.order.save(update_fields=["status", "interpretive"])
+        self.assertTrue(should_start_generation(self.order, retry_failed=False))
 
     @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
     def test_should_restart_orphaned_running_job(self, _configured):
@@ -2575,6 +2594,51 @@ class CyclesFallbackCopyTests(TestCase):
         self.assertTrue(card["short_explanation"])
         self.assertEqual(card["protective_function"], "")
         self.assertEqual(len(card["reflection_questions"]), 1)
+
+    def test_cycles_overview_has_no_take_it_or_leave_it_coaching(self):
+        from core.services.report_cycles_fallback import fallback_cycles_interpretation
+
+        payload = fallback_cycles_interpretation(
+            self._cycle_document(
+                self._uranus_sun(polarity="pressure", id="t_uranus_square_sun", aspect="square", aspect_ru="квадрат"),
+                {
+                    "id": "t_jupiter_trine_moon",
+                    "transit": "jupiter",
+                    "transit_name": "Юпитер",
+                    "natal": "moon",
+                    "natal_name": "Луна",
+                    "aspect": "trine",
+                    "aspect_ru": "тригон",
+                    "polarity": "resource",
+                    "orb": 0.8,
+                    "motion": "applying",
+                    "weight_hint": 0.62,
+                    "score": 0.4,
+                    "fact": "Юпитер в тригоне к Луне.",
+                    "window": {},
+                },
+            )
+        )
+        blob = json.dumps(payload, ensure_ascii=False)
+        self.assertNotIn("бери", blob.lower())
+        self.assertNotIn("Не узнаёшь", blob)
+
+    def test_ranked_hits_prefer_outer_planets_over_tighter_fast_orbs(self):
+        from core.services.report_cycles_fallback import ranked_hits
+
+        moon = {
+            "id": "t_moon_trine_uranus",
+            "transit": "moon",
+            "natal": "uranus",
+            "aspect": "trine",
+            "orb": 0.22,
+            "weight_hint": 0.12,
+            "score": 0.05,
+        }
+        uranus = self._uranus_sun(orb=1.8, score=0.71, weight_hint=0.94)
+        hits = ranked_hits(self._cycle_document(moon, uranus))
+        self.assertEqual(hits[0]["id"], "t_uranus_conjunction_sun")
+        self.assertEqual(hits[1]["id"], "t_moon_trine_uranus")
 
     def test_accept_llm_does_not_fill_empty_skill_fields(self):
         from core.services.report_cycles import (

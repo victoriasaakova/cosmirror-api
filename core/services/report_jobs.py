@@ -90,8 +90,9 @@ def should_start_generation(order: Order, *, retry_failed: bool = False) -> bool
             # polls a dead job until STALE_RUNNING (20 min).
             if order.pk in _inflight_orders:
                 return False
-        if status == "done" and not retry_failed:
-            return False
+        # generation=done is not a seal. If natal/aspects/cycles are not
+        # source=llm, GET must retry — otherwise a failed cycles call leaves
+        # the paid cabinet on YAML forever while Polza still has budget.
     return True
 
 

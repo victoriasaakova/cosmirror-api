@@ -172,8 +172,9 @@ def ranked_hits(document: dict[str, Any]) -> list[dict[str, Any]]:
             seen.append(row)
     seen.sort(
         key=lambda row: (
+            0 if str(row.get("transit") or "") in SUPPORTED_TRANSITS else 1,
+            -float(row.get("score") or row.get("weight_hint") or 0),
             float(row.get("orb") or 99),
-            -float(row.get("weight_hint") or 0),
         )
     )
     return seen[:MAX_CYCLES]
@@ -465,7 +466,7 @@ def _period_overview_from_cards(cards: list[dict[str, Any]]) -> dict[str, str]:
         summary = (
             "Это внешнее небо к уже посчитанной карте, не натальные аспекты. "
             "Ниже — текущие активации: где тема требует выбора, где есть более "
-            "доступный канал. Узнаёшь в опыте — бери. Не узнаёшь — это тоже ответ."
+            "доступный канал."
         )
     elif tension:
         headline = "Период, где привычные способы чаще встречают сопротивление"
