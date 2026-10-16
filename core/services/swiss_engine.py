@@ -147,11 +147,22 @@ def _bind_ephe_path(directory: Path) -> None:
     swe.set_ephe_path(str(directory) + os.sep)
 
 
+def _swieph_ok(retflag: int) -> bool:
+    return retflag >= 0 and bool(retflag & swe.FLG_SWIEPH)
+
+
 def _probe_swieph() -> tuple[bool, int]:
     jd = swe.julday(1995, 5, 26, 17.0 + 25.0 / 60.0, swe.GREG_CAL)
-    _xx, retflag = swe.calc_ut(jd, swe.SUN, swe.FLG_SWIEPH | swe.FLG_SPEED)
-    ok = retflag >= 0 and bool(retflag & swe.FLG_SWIEPH)
-    return ok, int(retflag)
+    flags = swe.FLG_SWIEPH | swe.FLG_SPEED
+    last = 0
+    # Первый calc_ut в процессе (и сразу после fork gunicorn) часто возвращает
+    # Moshier, retflag=260. Второй вызов уже читает файлы.
+    for _ in range(2):
+        _xx, retflag = swe.calc_ut(jd, swe.SUN, flags)
+        last = int(retflag)
+        if _swieph_ok(last):
+            return True, last
+    return False, last
 
 
 def reset_ephemeris_state() -> None:
@@ -216,9 +227,21 @@ def _check_finite(name: str, value: float) -> float:
 def _calc_raw(jd_ut: float, body_id: int) -> dict[str, float]:
     flags = swe.FLG_SWIEPH | swe.FLG_SPEED
     xx, retflag = swe.calc_ut(jd_ut, body_id, flags)
+    retflag = int(retflag)
+    if not _swieph_ok(retflag):
+        # Долгоживущий воркер gunicorn иногда отдаёт Moshier на первом теле.
+        # Повтор после close + set_ephe_path уже идёт в файлы, без ошибки пользователю.
+        logger.warning(
+            "Swiss Ephemeris retflag=%s for body %s; rebinding ephemeris path",
+            retflag,
+            body_id,
+        )
+        _bind_ephe_path(_ephe_dir())
+        xx, retflag = swe.calc_ut(jd_ut, body_id, flags)
+        retflag = int(retflag)
     if retflag < 0:
         raise NatalCalcError(f"Swiss Ephemeris calc failed for body {body_id}: {retflag}")
-    if not (retflag & swe.FLG_SWIEPH):
+    if not _swieph_ok(retflag):
         raise NatalCalcError(f"Unexpected Swiss Ephemeris mode retflag={retflag}")
     lon = normalize_longitude(_check_finite("longitude", float(xx[0])))
     return {

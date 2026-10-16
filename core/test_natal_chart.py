@@ -172,6 +172,27 @@ class NatalChartSkillTests(TestCase):
             "Неизвестная таймзона: Not/AZone",
         )
 
+    def test_moshier_fallback_is_retried_before_failing(self):
+        from unittest.mock import patch
+
+        from core.services import swiss_engine
+
+        calls = {"n": 0}
+
+        def fake_calc(_jd, _body, _flags):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return ([0.0, 0.0, 0.0, 1.0], 260)
+            return ([120.5, 0.1, 1.2, 0.4], 2 | 256)
+
+        with patch.object(swiss_engine.swe, "calc_ut", side_effect=fake_calc), patch.object(
+            swiss_engine, "_bind_ephe_path"
+        ) as rebind:
+            raw = swiss_engine._calc_raw(2450000.0, swiss_engine.swe.SUN)
+        self.assertEqual(calls["n"], 2)
+        rebind.assert_called_once()
+        self.assertAlmostEqual(raw["longitude"], 120.5)
+
     def test_truncated_ephemeris_files_are_replaced(self):
         import os
         import tempfile
