@@ -316,6 +316,21 @@ class CompatibilityApiTests(TestCase):
         self.assertEqual(missing.status_code, 400)
         self.assertEqual(CompatibilityReport.objects.count(), 0)
 
+    def test_expired_session_does_not_ask_for_login(self):
+        response = self.client.post(
+            "/api/compatibility/v1/reports",
+            {},
+            format="json",
+            HTTP_AUTHORIZATION="Bearer not-a-real-token",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "Нужны два профиля, A и B.")
+        missing = self.client.get(
+            "/api/compatibility/v1/reports/00000000-0000-4000-8000-000000000000",
+            HTTP_AUTHORIZATION="Bearer not-a-real-token",
+        )
+        self.assertEqual(missing.status_code, 404)
+
     def test_transits_path_validates_horizon_and_stays_pending(self):
         self.calls = []
         with patch("core.services.compatibility.service.calculate_natal", side_effect=self._fake_natal):

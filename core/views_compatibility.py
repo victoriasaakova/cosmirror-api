@@ -13,6 +13,7 @@ from core.services.compatibility.service import create_compatibility_report, tra
 
 
 class CompatibilityReportCreateView(APIView):
+    authentication_classes: list = []
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -38,6 +39,7 @@ class CompatibilityReportCreateView(APIView):
 
 
 class CompatibilityReportDetailView(APIView):
+    authentication_classes: list = []
     permission_classes = [permissions.AllowAny]
 
     def get(self, request, report_id):
@@ -48,6 +50,7 @@ class CompatibilityReportDetailView(APIView):
 
 
 class CompatibilityTransitView(APIView):
+    authentication_classes: list = []
     permission_classes = [permissions.AllowAny]
 
     def get(self, request, report_id):
