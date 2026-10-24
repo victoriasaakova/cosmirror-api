@@ -27,6 +27,8 @@ PROMPT_PAID_REPORT_ASPECTS = "paid_report_aspects"
 PROMPT_PAID_REPORT_CYCLES = "paid_report_cycles"
 PROMPT_PAID_REPORT_REQUEST = "paid_report_request"
 PROMPT_PAID_REPORT_PRACTICE = "paid_report_practice"
+PROMPT_COMPATIBILITY_BOND = "compatibility_bond"
+PROMPT_COMPATIBILITY_SIGNS = "compatibility_signs"
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*(?:\n|$)", re.DOTALL)
@@ -64,6 +66,14 @@ PROMPTS: dict[str, dict[str, Optional[str]]] = {
     PROMPT_PAID_REPORT_PRACTICE: {
         "setting": "LLM_MODEL_PAID_REPORT_PRACTICE",
         "path": "paid_report_practice.md",
+    },
+    PROMPT_COMPATIBILITY_BOND: {
+        "setting": "LLM_MODEL_COMPATIBILITY_BOND",
+        "path": "compatibility_bond.md",
+    },
+    PROMPT_COMPATIBILITY_SIGNS: {
+        "setting": "LLM_MODEL_COMPATIBILITY_SIGNS",
+        "path": "compatibility_signs.md",
     },
 }
 

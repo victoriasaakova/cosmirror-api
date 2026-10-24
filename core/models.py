@@ -634,3 +634,24 @@ class LlmRateBucket(models.Model):
 
     def __str__(self) -> str:
         return f"{self.key}={self.count}"
+
+class CompatibilityReport(models.Model):
+    """Отчёт пары. Публичный JSON не содержит дату, время и координаты."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    input_hash = models.CharField("Хэш входа", max_length=64, unique=True)
+    relationship_type = models.CharField("Тип связи", max_length=32)
+    reference_date = models.DateField("Опорная дата транзитов")
+    private_input = models.JSONField("Вход с данными рождения")
+    private_natals = models.JSONField("Две натальные карты")
+    public_document = models.JSONField("Публичный отчёт")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Отчёт совместимости"
+        verbose_name_plural = "Отчёты совместимости"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return str(self.id)

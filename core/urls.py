@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views
+from . import views, views_compatibility
 
 urlpatterns = [
     path("health/", views.HealthView.as_view(), name="health"),
@@ -99,6 +99,37 @@ urlpatterns = [
     path("astro/charts/", views.NatalChartListView.as_view(), name="natal-charts"),
     path("astro/cycles/", views.GlobalCycleListView.as_view(), name="global-cycles"),
     path("astro/sky-now/", views.SkyNowView.as_view(), name="sky-now"),
+    # Совместимость. Со слэшем и без: APPEND_SLASH иначе превращает POST в GET.
+    path(
+        "compatibility/v1/reports",
+        views_compatibility.CompatibilityReportCreateView.as_view(),
+        name="compatibility-report-create-noslash",
+    ),
+    path(
+        "compatibility/v1/reports/",
+        views_compatibility.CompatibilityReportCreateView.as_view(),
+        name="compatibility-report-create",
+    ),
+    path(
+        "compatibility/v1/reports/<uuid:report_id>",
+        views_compatibility.CompatibilityReportDetailView.as_view(),
+        name="compatibility-report-detail-noslash",
+    ),
+    path(
+        "compatibility/v1/reports/<uuid:report_id>/",
+        views_compatibility.CompatibilityReportDetailView.as_view(),
+        name="compatibility-report-detail",
+    ),
+    path(
+        "compatibility/v1/reports/<uuid:report_id>/transits",
+        views_compatibility.CompatibilityTransitView.as_view(),
+        name="compatibility-transits-noslash",
+    ),
+    path(
+        "compatibility/v1/reports/<uuid:report_id>/transits/",
+        views_compatibility.CompatibilityTransitView.as_view(),
+        name="compatibility-transits",
+    ),
     # Оплата Prodamus
     path("orders/", views.OrderCreateView.as_view(), name="order-create"),
     path("orders/<uuid:public_id>/", views.OrderDetailView.as_view(), name="order-detail"),
