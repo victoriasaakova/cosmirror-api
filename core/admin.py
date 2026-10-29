@@ -1,9 +1,15 @@
+import json
+
 from django.contrib import admin, messages
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
+from django.db.models import Q, TextField
+from django.db.models.functions import Cast
+from django.utils.html import format_html
 
 from .models import (
     ChartShare,
+    CompatibilityReport,
     GlobalPlanetaryCycle,
     JournalEntry,
     NatalChart,
@@ -200,6 +206,164 @@ class ReportSectionFeedbackAdmin(admin.ModelAdmin):
         if not text:
             return "—"
         return text if len(text) <= 80 else f"{text[:77]}…"
+
+
+def _compatibility_people(report: CompatibilityReport) -> dict[str, dict]:
+    raw = report.private_input if isinstance(report.private_input, dict) else {}
+    people = raw.get("persons")
+    found: dict[str, dict] = {}
+    if not isinstance(people, list):
+        return found
+    for person in people:
+        if isinstance(person, dict) and person.get("person_id") in {"A", "B"}:
+            found[str(person["person_id"])] = person
+    return found
+
+
+def _ru_date(value: object) -> str:
+    if not isinstance(value, str):
+        return "—"
+    parts = value.split("-")
+    if len(parts) == 3 and all(part.isdigit() for part in parts):
+        year, month, day = parts
+        return f"{day}.{month}.{year}"
+    return value or "—"
+
+
+def _clock(person: dict) -> str:
+    status = person.get("birth_time_status")
+    raw = person.get("birth_time")
+    if status == "unknown" or not raw:
+        return "время неизвестно"
+    clock = str(raw)[:5]
+    if status == "approximate":
+        return f"{clock}, примерно"
+    return clock
+
+
+def _person_line(person: dict | None) -> str:
+    if not person:
+        return "—"
+    name = str(person.get("display_name") or "").strip() or "без имени"
+    place = str(person.get("place_name") or "").strip() or "город не указан"
+    return f"{name} · {_ru_date(person.get('birth_date'))} · {_clock(person)} · {place}"
+
+
+def _search_needles(term: str) -> list[str]:
+    """SQLite хранит JSON с \\u-экранированием, Postgres — обычным текстом."""
+    variants = {
+        term,
+        term.casefold(),
+        term.lower(),
+        term.upper(),
+        term.capitalize(),
+        term.title(),
+    }
+    needles: set[str] = set()
+    for variant in variants:
+        if not variant:
+            continue
+        needles.add(variant)
+        dumped = json.dumps(variant, ensure_ascii=True)
+        if len(dumped) >= 2 and dumped[0] == '"' and dumped[-1] == '"':
+            needles.add(dumped[1:-1])
+    return list(needles)
+
+
+def _person_detail(person: dict | None) -> str:
+    if not person:
+        return "—"
+    timezone_id = str(person.get("timezone_id") or "").strip() or "—"
+    latitude = person.get("latitude")
+    longitude = person.get("longitude")
+    coords = "—"
+    if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
+        coords = f"{latitude:.4f}, {longitude:.4f}"
+    return f"{_person_line(person)}\nчасовой пояс: {timezone_id}\nкоординаты: {coords}"
+
+
+@admin.register(CompatibilityReport)
+class CompatibilityReportAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "person_a", "person_b")
+    list_display_links = ("created_at",)
+    list_filter = ("created_at",)
+    search_fields = ("input_hash",)
+    date_hierarchy = "created_at"
+    ordering = ("-created_at",)
+    readonly_fields = (
+        "created_at",
+        "entered_pair",
+        "relationship_type",
+        "reference_date",
+        "id",
+        "input_hash",
+        "private_input",
+        "updated_at",
+    )
+    fieldsets = (
+        (
+            "Что ввели",
+            {"fields": ("created_at", "entered_pair", "relationship_type", "reference_date")},
+        ),
+        (
+            "Служебное",
+            {
+                "classes": ("collapse",),
+                "fields": ("id", "input_hash", "private_input", "updated_at"),
+            },
+        ),
+    )
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).defer("private_natals", "public_document")
+
+    def get_search_results(self, request, queryset, search_term):
+        term = (search_term or "").strip()
+        if not term:
+            return queryset, False
+        annotated = queryset.annotate(_input_text=Cast("private_input", TextField()))
+        matched = Q()
+        for needle in _search_needles(term):
+            matched |= Q(_input_text__icontains=needle) | Q(input_hash__icontains=needle)
+        return annotated.filter(matched), False
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            return False
+        return super().has_change_permission(request, obj)
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        context = {
+            "show_save": False,
+            "show_save_and_continue": False,
+            "show_save_and_add_another": False,
+        }
+        if extra_context:
+            context.update(extra_context)
+        return super().change_view(request, object_id, form_url, context)
+
+    @admin.display(description="Ты")
+    def person_a(self, obj: CompatibilityReport) -> str:
+        return _person_line(_compatibility_people(obj).get("A"))
+
+    @admin.display(description="Партнёр")
+    def person_b(self, obj: CompatibilityReport) -> str:
+        return _person_line(_compatibility_people(obj).get("B"))
+
+    @admin.display(description="Пара")
+    def entered_pair(self, obj: CompatibilityReport) -> str:
+        people = _compatibility_people(obj)
+        text = (
+            f"Ты\n{_person_detail(people.get('A'))}\n\n"
+            f"Партнёр\n{_person_detail(people.get('B'))}"
+        )
+        return format_html(
+            '<pre style="white-space:pre-wrap;margin:0;font-family:inherit">{}</pre>',
+            text,
+        )
 
 
 @admin.register(ChartShare)
