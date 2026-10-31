@@ -6,10 +6,15 @@
 
 from __future__ import annotations
 
-SCHEMA_VERSION = "compatibility-v1"
+SCHEMA_VERSION = "compatibility-v2"
 SYNASTRY_POLICY_VERSION = "synastry-orbs-v1"
 TAXONOMY_VERSION = "bond-taxonomy-v1"
-WRITER_VERSION = "compatibility-writers-v2"
+WRITER_VERSION = "compatibility-writers-v14"
+SCORING_POLICY_VERSION = "compatibility-scoring-v2-draft"
+DEEP_DIVE_POLICY_VERSION = "deep-dive-story-v2.3"
+CONCLUSION_POLICY_VERSION = "conclusion-routing-v2-draft"
+ACTIVE_CYCLES_POLICY_VERSION = "active-cycles-v2-draft"
+EDITORIAL_VERSION = "2.2"
 
 HORIZON_PAST_DAYS = 0
 HORIZON_FUTURE_MONTHS = 18
@@ -31,6 +36,23 @@ SOCIAL = frozenset({"jupiter", "saturn"})
 SLOW = frozenset({"uranus", "neptune", "pluto"})
 ANGLES = frozenset({"asc", "mc"})
 NODES = frozenset({"north_node", "south_node"})
+
+PLANET_ROLE = {
+    "sun": "самовыражение",
+    "moon": "эмоциональный отклик",
+    "mercury": "разговор",
+    "venus": "близость",
+    "mars": "действие",
+    "jupiter": "рост",
+    "saturn": "границы",
+    "uranus": "неожиданный поворот",
+    "neptune": "идеал",
+    "pluto": "глубина перемен",
+    "north_node": "новое направление",
+    "south_node": "привычный сценарий",
+    "asc": "манера проявляться",
+    "mc": "публичная роль",
+}
 
 CHART_BODIES: tuple[str, ...] = (
     "sun",

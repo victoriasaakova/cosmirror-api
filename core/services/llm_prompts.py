@@ -27,8 +27,15 @@ PROMPT_PAID_REPORT_ASPECTS = "paid_report_aspects"
 PROMPT_PAID_REPORT_CYCLES = "paid_report_cycles"
 PROMPT_PAID_REPORT_REQUEST = "paid_report_request"
 PROMPT_PAID_REPORT_PRACTICE = "paid_report_practice"
+PROMPT_COMPATIBILITY_EDITORIAL = "compatibility_editorial"
 PROMPT_COMPATIBILITY_BOND = "compatibility_bond"
 PROMPT_COMPATIBILITY_SIGNS = "compatibility_signs"
+PROMPT_COMPATIBILITY_INSIGHT = "compatibility_insight"
+PROMPT_COMPATIBILITY_INSIGHT_BLUEPRINT = "compatibility_insight_blueprint"
+PROMPT_COMPATIBILITY_DEEP_DIVE = "compatibility_deep_dive"
+PROMPT_COMPATIBILITY_CYCLES = "compatibility_cycles"
+PROMPT_COMPATIBILITY_GOLD = "compatibility_gold"
+PROMPT_COMPATIBILITY_INDICES = "compatibility_indices"
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*(?:\n|$)", re.DOTALL)
@@ -67,6 +74,10 @@ PROMPTS: dict[str, dict[str, Optional[str]]] = {
         "setting": "LLM_MODEL_PAID_REPORT_PRACTICE",
         "path": "paid_report_practice.md",
     },
+    PROMPT_COMPATIBILITY_EDITORIAL: {
+        "setting": "LLM_MODEL_COMPATIBILITY_EDITORIAL",
+        "path": "compatibility_editorial.md",
+    },
     PROMPT_COMPATIBILITY_BOND: {
         "setting": "LLM_MODEL_COMPATIBILITY_BOND",
         "path": "compatibility_bond.md",
@@ -74,6 +85,30 @@ PROMPTS: dict[str, dict[str, Optional[str]]] = {
     PROMPT_COMPATIBILITY_SIGNS: {
         "setting": "LLM_MODEL_COMPATIBILITY_SIGNS",
         "path": "compatibility_signs.md",
+    },
+    PROMPT_COMPATIBILITY_INSIGHT: {
+        "setting": "LLM_MODEL_COMPATIBILITY_INSIGHT",
+        "path": "compatibility_insight.md",
+    },
+    PROMPT_COMPATIBILITY_INSIGHT_BLUEPRINT: {
+        "setting": "LLM_MODEL_COMPATIBILITY_INSIGHT_BLUEPRINT",
+        "path": "compatibility_insight_blueprint.md",
+    },
+    PROMPT_COMPATIBILITY_DEEP_DIVE: {
+        "setting": "LLM_MODEL_COMPATIBILITY_DEEP_DIVE",
+        "path": "compatibility_deep_dive.md",
+    },
+    PROMPT_COMPATIBILITY_CYCLES: {
+        "setting": "LLM_MODEL_COMPATIBILITY_CYCLES",
+        "path": "compatibility_cycles.md",
+    },
+    PROMPT_COMPATIBILITY_GOLD: {
+        "setting": "LLM_MODEL_COMPATIBILITY_GOLD",
+        "path": "compatibility_gold.md",
+    },
+    PROMPT_COMPATIBILITY_INDICES: {
+        "setting": "LLM_MODEL_COMPATIBILITY_INDICES",
+        "path": "compatibility_indices.md",
     },
 }
 

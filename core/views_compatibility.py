@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 from core.models import CompatibilityReport
 from core.services.compatibility.input import CompatibilityError
 from core.services.compatibility.policy import SCHEMA_VERSION
-from core.services.compatibility.service import create_compatibility_report, transit_view
+from core.services.compatibility.service import create_compatibility_report, document_for_read, transit_view
 
 
 class CompatibilityReportCreateView(APIView):
@@ -46,7 +46,7 @@ class CompatibilityReportDetailView(APIView):
         report = CompatibilityReport.objects.filter(id=report_id).first()
         if report is None:
             return Response({"detail": "Отчёт не найден."}, status=status.HTTP_404_NOT_FOUND)
-        return Response(report.public_document)
+        return Response(document_for_read(report))
 
 
 class CompatibilityTransitView(APIView):

@@ -10,7 +10,38 @@ from datetime import date, datetime, time
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
-from .policy import SYNASTRY_POLICY_VERSION, TAXONOMY_VERSION, WRITER_VERSION
+from .policy import (
+    ACTIVE_CYCLES_POLICY_VERSION,
+    CONCLUSION_POLICY_VERSION,
+    DEEP_DIVE_POLICY_VERSION,
+    EDITORIAL_VERSION,
+    SCORING_POLICY_VERSION,
+    SYNASTRY_POLICY_VERSION,
+    TAXONOMY_VERSION,
+    WRITER_VERSION,
+)
+
+RELATIONSHIP_STATUSES = {
+    "romantic": frozenset({"crush", "dating", "together", "uncertain", "ended"}),
+    "friendship": frozenset({"new", "close", "distant", "ended"}),
+    "family": frozenset({"active", "strained", "distant", "no_contact"}),
+}
+FAMILY_ROLES = frozenset(
+    {
+        "mother",
+        "father",
+        "parent",
+        "daughter",
+        "son",
+        "child",
+        "sister",
+        "brother",
+        "sibling",
+        "grandmother",
+        "grandfather",
+        "grandchild",
+    }
+)
 
 
 class CompatibilityError(Exception):
@@ -57,6 +88,9 @@ class PersonInput:
 @dataclass(frozen=True)
 class ParsedRequest:
     relationship_type: str
+    relationship_status: Optional[str]
+    family_role: Optional[str]
+    user_question: Optional[str]
     reference_date: date
     persons: tuple[PersonInput, PersonInput]
 
@@ -73,8 +107,17 @@ def parse_request(payload: Any, *, today: date) -> ParsedRequest:
     if not isinstance(payload, dict):
         raise CompatibilityError("Нужно передать JSON с двумя профилями.")
     relationship = payload.get("relationship_type") or "romantic"
-    if relationship != "romantic":
-        raise CompatibilityError("В этой версии поддерживается только romantic.")
+    if relationship not in RELATIONSHIP_STATUSES:
+        raise CompatibilityError("Тип связи указан неверно.")
+    status = _optional_text(payload.get("relationship_status"), "Статус связи указан неверно.", 32)
+    if status is not None and status not in RELATIONSHIP_STATUSES[relationship]:
+        raise CompatibilityError("Статус связи не подходит к этому типу.")
+    family_role = _optional_text(payload.get("family_role"), "Семейная роль указана неверно.", 32)
+    if family_role is not None and relationship != "family":
+        raise CompatibilityError("Семейная роль указывается только для family.")
+    if family_role is not None and family_role not in FAMILY_ROLES:
+        raise CompatibilityError("Семейная роль указана неверно.")
+    question = _optional_text(payload.get("user_question"), "Вопрос указан неверно.", 500)
     reference = payload.get("reference_date")
     if reference in (None, ""):
         anchor = today
@@ -90,16 +133,32 @@ def parse_request(payload: Any, *, today: date) -> ParsedRequest:
     if sorted(ids) != ["A", "B"]:
         raise CompatibilityError("Нужны два профиля, A и B.")
     ordered = tuple(sorted(persons, key=lambda person: person.person_id))
-    return ParsedRequest(relationship_type="romantic", reference_date=anchor, persons=ordered)
+    return ParsedRequest(
+        relationship_type=relationship,
+        relationship_status=status,
+        family_role=family_role,
+        user_question=question,
+        reference_date=anchor,
+        persons=ordered,
+    )
 
 
 def input_hash(parsed: ParsedRequest) -> str:
     payload = {
         "persons": [person.canonical() for person in parsed.persons],
         "relationship_type": parsed.relationship_type,
+        "relationship_status": parsed.relationship_status,
+        "family_role": parsed.family_role,
+        "user_question": parsed.user_question,
+        "reference_date": parsed.reference_date.isoformat(),
         "synastry_policy_version": SYNASTRY_POLICY_VERSION,
         "taxonomy_version": TAXONOMY_VERSION,
         "writer_version": WRITER_VERSION,
+        "scoring_policy_version": SCORING_POLICY_VERSION,
+        "deep_dive_policy_version": DEEP_DIVE_POLICY_VERSION,
+        "conclusion_policy_version": CONCLUSION_POLICY_VERSION,
+        "active_cycles_policy_version": ACTIVE_CYCLES_POLICY_VERSION,
+        "editorial_version": EDITORIAL_VERSION,
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -158,6 +217,19 @@ def _parse_person(row: Any) -> PersonInput:
         longitude=longitude,
         timezone_id=timezone_id,
     )
+
+
+def _optional_text(value: Any, message: str, limit: int) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise CompatibilityError(message)
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) > limit:
+        raise CompatibilityError(message)
+    return text
 
 
 def _parse_date(value: Any, message: str) -> date:
