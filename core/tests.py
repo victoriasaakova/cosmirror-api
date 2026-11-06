@@ -1027,8 +1027,8 @@ class PaidReportTests(TestCase):
         self.assertTrue(should_start_generation(self.order, retry_failed=True))
 
     @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
-    def test_should_restart_when_job_done_but_cycles_not_llm(self, _configured):
-        from core.services.report_jobs import should_start_generation
+    def test_formed_report_does_not_regenerate_when_cycles_fell_back(self, _configured):
+        from core.services.report_jobs import kickoff_paid_report_for_order, should_start_generation
 
         self.order.status = Order.Status.PAID
         self.order.interpretive = {
@@ -1043,7 +1043,52 @@ class PaidReportTests(TestCase):
             },
         }
         self.order.save(update_fields=["status", "interpretive"])
-        self.assertTrue(should_start_generation(self.order, retry_failed=False))
+        self.assertFalse(should_start_generation(self.order, retry_failed=False))
+        kickoff_paid_report_for_order(self.order, retry_failed=False)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.interpretive["generation"]["status"], "done")
+        self.assertEqual(self.order.interpretive["cycles"]["source"], "fallback")
+
+    @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
+    def test_orphaned_running_job_does_not_hide_formed_report(self, _configured):
+        from datetime import datetime, timezone
+
+        from core.services.report_jobs import kickoff_paid_report_for_order, should_start_generation
+
+        self.order.status = Order.Status.PAID
+        self.order.interpretive = {
+            "generation": {
+                "status": "running",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "current_section": "cycles",
+            },
+            "natal": {"source": "llm", "status": "ready"},
+            "aspects": {"source": "llm", "status": "ready"},
+            "cycles": {"source": "fallback", "status": "ready"},
+        }
+        self.order.save(update_fields=["status", "interpretive"])
+        self.assertFalse(should_start_generation(self.order, retry_failed=False))
+        kickoff_paid_report_for_order(self.order, retry_failed=False)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.interpretive["generation"]["status"], "done")
+        self.assertNotIn("current_section", self.order.interpretive["generation"])
+
+    @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
+    def test_failed_job_does_not_hide_formed_report(self, _configured):
+        from core.services.report_jobs import kickoff_paid_report_for_order, should_start_generation
+
+        self.order.status = Order.Status.PAID
+        self.order.interpretive = {
+            "generation": {"status": "failed", "error_code": "invalid_llm_payload"},
+            "natal": {"source": "llm", "status": "ready"},
+            "aspects": {"source": "llm", "status": "ready"},
+            "cycles": {"source": "fallback", "status": "ready"},
+        }
+        self.order.save(update_fields=["status", "interpretive"])
+        self.assertFalse(should_start_generation(self.order, retry_failed=False))
+        kickoff_paid_report_for_order(self.order, retry_failed=False)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.interpretive["generation"]["status"], "done")
 
     @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
     def test_should_restart_orphaned_running_job(self, _configured):
