@@ -4,8 +4,8 @@
 Оплата стартует job. GET сразу отдаёт fallback shell — кабинет открывается
 по нему, LLM overlays natal/aspects/cycles, затем request и practice.
 Повторный GET / логин не вызывают Polza, если карта, аспекты и циклы уже
-собраны (source=llm или готовый fallback). Готовый отчёт не ставится заново
-в «формируется». GET только читает кэш. Браузер не дергает generate-эндпоинты.
+source=llm. Циклы на fallback и зависший job собираются заново.
+Отчёт не отдаём только если он не собран по API и у провайдера кончились лимиты.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def layers_need_llm(order: Order) -> bool:
 
 
 def core_layers_ready(order: Order) -> bool:
-    """Карта, аспекты и циклы уже sealed как LLM — новый Polza-job не нужен."""
+    """Карта, аспекты и циклы уже собраны по API — новый Polza-job не нужен."""
     store = order.interpretive if isinstance(order.interpretive, dict) else {}
     for key in CORE_LAYERS:
         layer = store.get(key)
@@ -61,16 +61,69 @@ def core_layers_ready(order: Order) -> bool:
     return True
 
 
-def core_report_formed(order: Order) -> bool:
-    """Три основных раздела уже показаны: LLM или готовый fallback. Повторно не собираем."""
+_LIMIT_MARKERS = (
+    "status=429",
+    "status=402",
+    "rate_limit",
+    "rate limit",
+    "too many requests",
+    "insufficient_quota",
+    "insufficient quota",
+    "quota",
+    "billing",
+    "credit",
+    "лимит",
+)
+
+
+def provider_limit_error(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(marker in lowered for marker in _LIMIT_MARKERS)
+
+
+def _interpretive_store(order: Order) -> dict[str, Any]:
     store = order.interpretive if isinstance(order.interpretive, dict) else {}
+    return store
+
+
+def limits_block_unassembled_report(order: Order) -> bool:
+    """Не отдавать отчёт: ни один основной слой не собран по API, и провайдер упёрся в лимит."""
+    store = _interpretive_store(order)
     for key in CORE_LAYERS:
         layer = store.get(key)
-        if not isinstance(layer, dict) or layer.get("status") != "ready":
+        if isinstance(layer, dict) and layer.get("source") == "llm":
             return False
-        if str(layer.get("source") or "") not in {"llm", "fallback"}:
-            return False
-    return True
+    newest: datetime | None = None
+    saw_limit = False
+    texts: list[str] = []
+    job = store.get("generation")
+    if isinstance(job, dict):
+        texts.append(str(job.get("error") or ""))
+        texts.append(str(job.get("error_code") or ""))
+        raw = str(job.get("finished_at") or job.get("started_at") or "")
+        parsed = parse_datetime(raw) if raw else None
+        if parsed is not None:
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            newest = parsed
+    for key in (*CORE_LAYERS, "request", "practice"):
+        layer = store.get(key)
+        if not isinstance(layer, dict):
+            continue
+        texts.append(str(layer.get("error") or ""))
+        raw = str(layer.get("generated_at") or "")
+        parsed = parse_datetime(raw) if raw else None
+        if parsed is not None:
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            if newest is None or parsed > newest:
+                newest = parsed
+    saw_limit = any(provider_limit_error(text) for text in texts)
+    if not saw_limit:
+        return False
+    if newest is None:
+        return True
+    return datetime.now(timezone.utc) - newest <= STALE_RUNNING
 
 
 def _job_stale(job: dict[str, Any]) -> bool:
@@ -90,8 +143,9 @@ def should_start_generation(order: Order, *, retry_failed: bool = False) -> bool
         return False
     if not layers_need_llm(order):
         return False
-    # Готовый отчёт (LLM или уже показанный fallback) не собираем заново на GET/логине.
-    if (core_layers_ready(order) or core_report_formed(order)) and not retry_failed:
+    if core_layers_ready(order) and not retry_failed:
+        return False
+    if limits_block_unassembled_report(order) and not retry_failed:
         return False
     store = order.interpretive if isinstance(order.interpretive, dict) else {}
     job = store.get("generation")
@@ -99,10 +153,13 @@ def should_start_generation(order: Order, *, retry_failed: bool = False) -> bool
         status = str(job.get("status") or "")
         if status == "running" and not _job_stale(job):
             # Live thread holds the job. After runserver reload the DB row stays
-            # "running" but _inflight_orders is empty — restart only if the
-            # report was not formed yet.
+            # "running" but _inflight_orders is empty — restart, or the cabinet
+            # polls a dead job until STALE_RUNNING (20 min).
             if order.pk in _inflight_orders:
                 return False
+        # generation=done is not a seal. If natal/aspects/cycles are not
+        # source=llm, GET must retry — otherwise a failed cycles call leaves
+        # the paid cabinet on YAML forever while Polza still has budget.
     return True
 
 
@@ -208,26 +265,8 @@ def release_section(order_id: int, section: str) -> None:
         _section_inflight.discard(key)
 
 
-def _finish_orphaned_job(order: Order) -> None:
-    """Снять «формируется» с отчёта, который уже собран, но job завис в running/failed."""
-    if order.pk in _inflight_orders:
-        return
-    if not core_report_formed(order):
-        return
-    store = order.interpretive if isinstance(order.interpretive, dict) else {}
-    job = store.get("generation")
-    if not isinstance(job, dict):
-        return
-    if str(job.get("status") or "") not in {"running", "failed"}:
-        return
-    mark_generation_status(order, "done")
-
-
 def kickoff_paid_report_for_order(order: Order, *, retry_failed: bool = False) -> None:
     if order is None or order.status != Order.Status.PAID:
-        return
-    if not should_start_generation(order, retry_failed=retry_failed):
-        _finish_orphaned_job(order)
         return
     schedule_paid_report_generation(order.pk, retry_failed=retry_failed)
 

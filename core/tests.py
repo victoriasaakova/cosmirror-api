@@ -1027,8 +1027,8 @@ class PaidReportTests(TestCase):
         self.assertTrue(should_start_generation(self.order, retry_failed=True))
 
     @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
-    def test_formed_report_does_not_regenerate_when_cycles_fell_back(self, _configured):
-        from core.services.report_jobs import kickoff_paid_report_for_order, should_start_generation
+    def test_should_restart_when_job_done_but_cycles_not_llm(self, _configured):
+        from core.services.report_jobs import should_start_generation
 
         self.order.status = Order.Status.PAID
         self.order.interpretive = {
@@ -1043,17 +1043,13 @@ class PaidReportTests(TestCase):
             },
         }
         self.order.save(update_fields=["status", "interpretive"])
-        self.assertFalse(should_start_generation(self.order, retry_failed=False))
-        kickoff_paid_report_for_order(self.order, retry_failed=False)
-        self.order.refresh_from_db()
-        self.assertEqual(self.order.interpretive["generation"]["status"], "done")
-        self.assertEqual(self.order.interpretive["cycles"]["source"], "fallback")
+        self.assertTrue(should_start_generation(self.order, retry_failed=False))
 
     @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
-    def test_orphaned_running_job_does_not_hide_formed_report(self, _configured):
+    def test_hung_job_restarts_when_cycles_fell_back(self, _configured):
         from datetime import datetime, timezone
 
-        from core.services.report_jobs import kickoff_paid_report_for_order, should_start_generation
+        from core.services.report_jobs import _inflight_orders, should_start_generation
 
         self.order.status = Order.Status.PAID
         self.order.interpretive = {
@@ -1067,28 +1063,56 @@ class PaidReportTests(TestCase):
             "cycles": {"source": "fallback", "status": "ready"},
         }
         self.order.save(update_fields=["status", "interpretive"])
-        self.assertFalse(should_start_generation(self.order, retry_failed=False))
-        kickoff_paid_report_for_order(self.order, retry_failed=False)
-        self.order.refresh_from_db()
-        self.assertEqual(self.order.interpretive["generation"]["status"], "done")
-        self.assertNotIn("current_section", self.order.interpretive["generation"])
+        _inflight_orders.discard(self.order.pk)
+        self.assertTrue(should_start_generation(self.order, retry_failed=False))
 
     @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
-    def test_failed_job_does_not_hide_formed_report(self, _configured):
-        from core.services.report_jobs import kickoff_paid_report_for_order, should_start_generation
+    def test_api_limit_hides_report_that_never_assembled(self, _configured):
+        from datetime import datetime, timezone
 
+        from core.serializers import OrderSerializer
+        from core.services.report_jobs import should_start_generation
+
+        now = datetime.now(timezone.utc).isoformat()
         self.order.status = Order.Status.PAID
         self.order.interpretive = {
-            "generation": {"status": "failed", "error_code": "invalid_llm_payload"},
-            "natal": {"source": "llm", "status": "ready"},
-            "aspects": {"source": "llm", "status": "ready"},
-            "cycles": {"source": "fallback", "status": "ready"},
+            "generation": {"status": "done", "finished_at": now},
+            "natal": {
+                "source": "fallback",
+                "status": "ready",
+                "error": "Polza request failed: status=429 rate limit",
+                "generated_at": now,
+            },
+            "aspects": {"source": "fallback", "status": "ready", "generated_at": now},
+            "cycles": {"source": "fallback", "status": "ready", "generated_at": now},
         }
         self.order.save(update_fields=["status", "interpretive"])
         self.assertFalse(should_start_generation(self.order, retry_failed=False))
-        kickoff_paid_report_for_order(self.order, retry_failed=False)
-        self.order.refresh_from_db()
-        self.assertEqual(self.order.interpretive["generation"]["status"], "done")
+        self.assertIsNone(OrderSerializer(self.order).data["report"])
+
+    @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
+    def test_api_limit_still_returns_report_assembled_via_api(self, _configured):
+        from datetime import datetime, timezone
+
+        from core.serializers import OrderSerializer
+        from core.services.report_jobs import should_start_generation
+
+        now = datetime.now(timezone.utc).isoformat()
+        self.order.status = Order.Status.PAID
+        self.order.interpretive = {
+            "generation": {"status": "done", "finished_at": now},
+            "natal": {"source": "llm", "status": "ready", "generated_at": now},
+            "aspects": {"source": "llm", "status": "ready", "generated_at": now},
+            "cycles": {
+                "source": "fallback",
+                "status": "ready",
+                "error": "Polza request failed: status=429 insufficient quota",
+                "generated_at": now,
+            },
+        }
+        self.order.save(update_fields=["status", "interpretive"])
+        self.assertTrue(should_start_generation(self.order, retry_failed=False))
+        self.assertIsNotNone(OrderSerializer(self.order).data["report"])
 
     @patch("core.services.report_jobs.llm_client.is_configured", return_value=True)
     def test_should_restart_orphaned_running_job(self, _configured):

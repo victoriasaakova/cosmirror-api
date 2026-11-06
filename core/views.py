@@ -1042,6 +1042,13 @@ class OrderReportPdfView(APIView):
         )
         if order is None or order.status != Order.Status.PAID:
             return Response({"detail": "Отчёт будет после оплаты."}, status=status.HTTP_403_FORBIDDEN)
+        from core.services.report_jobs import limits_block_unassembled_report
+
+        if limits_block_unassembled_report(order):
+            return Response(
+                {"detail": "Отчёт ещё не собран: у API закончились лимиты."},
+                status=status.HTTP_409_CONFLICT,
+            )
         from core.services.pdf_report import render_report_pdf
         from core.services.report import paid_report_for_pdf
 

@@ -488,6 +488,10 @@ class OrderSerializer(serializers.ModelSerializer):
     def get_report(self, order: Order):
         if order.status != Order.Status.PAID:
             return None
+        from core.services.report_jobs import limits_block_unassembled_report
+
+        if limits_block_unassembled_report(order):
+            return None
         from core.services.report import public_paid_report
 
         try:
