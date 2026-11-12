@@ -1,4 +1,4 @@
-"""Админка показывает анонимный ввод пары и не даёт его править."""
+"""Админка показывает анонимный ввод пары, текст интерпретации и не даёт его править."""
 
 from __future__ import annotations
 
@@ -62,8 +62,129 @@ class CompatibilityAdminTests(TestCase):
         self.assertEqual(page.status_code, 200)
         self.assertContains(page, "Europe/Warsaw")
         self.assertContains(page, "54.5181, 18.5305")
+        self.assertContains(page, "Текст интерпретации не записан.")
         self.assertNotContains(page, 'name="_save"')
         denied = self.client.post(url, {"relationship_type": "friendship"})
         self.assertEqual(denied.status_code, 403)
         self.report.refresh_from_db()
         self.assertEqual(self.report.relationship_type, "romantic")
+
+    def test_change_page_shows_the_current_reading(self):
+        report = CompatibilityReport.objects.create(
+            input_hash="cd" * 32,
+            relationship_type="romantic",
+            reference_date=date(2026, 11, 12),
+            private_input={"persons": [_person("A"), _person("B")]},
+            private_natals={"A": {}, "B": {}},
+            public_document={
+                "relationship_context": {"user_question": "Куда это идёт?"},
+                "persons": [
+                    {"id": "A", "display_name": "Алина"},
+                    {"id": "B", "display_name": "Марк"},
+                ],
+                "insight": {
+                    "title": "Между вами держится свой темп",
+                    "body": "Близость здесь появляется через разный ритм.",
+                    "basis": "Венера Алины в тригоне к Марсу Марка.",
+                },
+                "scoring": {
+                    "harmony": {"value": 72, "status": "ready", "summary": "Поддержка заметна в мягких аспектах."},
+                },
+                "deep_dive": {
+                    "sections": [
+                        {
+                            "section_title": "Что вас сближает и притягивает",
+                            "headline": "Тепло не отменяет разницу реакций",
+                            "body": "Один ищет отклик сразу, другой сверяется дольше.",
+                            "analysis": "внутренний план, его не показывают",
+                        }
+                    ],
+                    "conclusion": {
+                        "headline": "Связь можно различать без прогноза",
+                        "body": "Карта не обещает, чем закончится контакт.",
+                    },
+                },
+                "active_cycles": {
+                    "persons": {
+                        "A": {
+                            "status": "ready",
+                            "interpretation": {
+                                "headline": "Сейчас нагрузка может становиться заметнее",
+                                "body": "У Алины отдельный фон периода.",
+                                "astrological_basis_ru": "Сатурн в квадрате к Венере — Алина.",
+                            },
+                        },
+                        "B": {"status": "unavailable", "interpretation": None},
+                    }
+                },
+                "pair_card": {
+                    "status": "ready",
+                    "card": {"name": "Влюблённые"},
+                    "love": {
+                        "name": "Влюблённые",
+                        "upright": "Выбор близости остаётся за обоими.",
+                        "reversed": "Тень карты — решать за другого.",
+                    },
+                },
+                "bond": {
+                    "insights": [
+                        {"title": "Старый текст связки", "summary": "Этот абзац на текущей странице не показывают."}
+                    ]
+                },
+            },
+        )
+        page = self.client.get(f"/admin/core/compatibilityreport/{report.id}/change/")
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "Куда это идёт?")
+        self.assertContains(page, "Между вами держится свой темп")
+        self.assertContains(page, "Близость здесь появляется через разный ритм.")
+        self.assertContains(page, "Венера Алины в тригоне к Марсу Марка.")
+        self.assertContains(page, "72%")
+        self.assertContains(page, "Поддержка заметна в мягких аспектах.")
+        self.assertContains(page, "Тепло не отменяет разницу реакций")
+        self.assertContains(page, "Один ищет отклик сразу, другой сверяется дольше.")
+        self.assertContains(page, "Карта не обещает, чем закончится контакт.")
+        self.assertContains(page, "Цикл · Алина")
+        self.assertContains(page, "У Алины отдельный фон периода.")
+        self.assertContains(page, "Сейчас нет отдельного значимого цикла по выбранным критериям.")
+        self.assertContains(page, "Главная тема отношений")
+        self.assertContains(page, "Выбор близости остаётся за обоими.")
+        self.assertContains(page, "Теневая сторона")
+        self.assertNotContains(page, "внутренний план, его не показывают")
+        self.assertNotContains(page, "Этот абзац на текущей странице не показывают.")
+
+    def test_change_page_shows_the_older_reading(self):
+        report = CompatibilityReport.objects.create(
+            input_hash="ef" * 32,
+            relationship_type="romantic",
+            reference_date=date(2026, 10, 24),
+            private_input={"persons": [_person("A"), _person("B")]},
+            private_natals={"A": {}, "B": {}},
+            public_document={
+                "schema_version": "compatibility-v1",
+                "bond": {
+                    "insights": [
+                        {
+                            "category": "attraction",
+                            "title": "Интерес и ответное движение",
+                            "summary": "Между вами Венера и Марс образуют тригон.",
+                            "deep_read": "Это можно проверить на вашем опыте.",
+                        }
+                    ]
+                },
+                "signs": {
+                    "comparisons": [
+                        {
+                            "point": "sun",
+                            "meaning": "Твоё Солнце в Овне, Солнце другого человека в Весах.",
+                            "difference": "Одинаковый знак не означает одинаковый опыт.",
+                        }
+                    ]
+                },
+            },
+        )
+        page = self.client.get(f"/admin/core/compatibilityreport/{report.id}/change/")
+        self.assertContains(page, "Между вами Венера и Марс образуют тригон.")
+        self.assertContains(page, "Это можно проверить на вашем опыте.")
+        self.assertContains(page, "Знаки · Солнце")
+        self.assertContains(page, "Твоё Солнце в Овне, Солнце другого человека в Весах.")

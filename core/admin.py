@@ -5,7 +5,7 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from django.db.models import Q, TextField
 from django.db.models.functions import Cast
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 
 from .models import (
     ChartShare,
@@ -22,6 +22,7 @@ from .models import (
     UserInput,
     WaitlistLead,
 )
+from .services.compatibility.policy import BODY_RU, CATEGORY_TITLE
 
 
 class ProfileInline(admin.StackedInline):
@@ -270,6 +271,187 @@ def _search_needles(term: str) -> list[str]:
     return list(needles)
 
 
+_SCORE_TITLES = (
+    ("harmony", "Гармония и совместимость"),
+    ("karmic_patterns", "Кармическая связь"),
+    ("current_tension", "Напряжение сейчас"),
+    ("transformation", "Потенциал трансформации"),
+)
+
+_EMPTY_READING = "Текст интерпретации не записан."
+_EMPTY_CYCLE = "Сейчас нет отдельного значимого цикла по выбранным критериям."
+
+
+def _text(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _paragraphs(*parts: object) -> str:
+    rows: list[str] = []
+    for part in parts:
+        text = _text(part)
+        if text and text not in rows:
+            rows.append(text)
+    return "\n\n".join(rows)
+
+
+def _reading_blocks(document: object) -> list[tuple[str, str]]:
+    if not isinstance(document, dict):
+        return []
+    blocks: list[tuple[str, str]] = []
+    context = document.get("relationship_context")
+    if isinstance(context, dict):
+        _add_block(blocks, "Вопрос", _text(context.get("user_question")))
+    if not _add_current_reading(blocks, document):
+        _add_legacy_reading(blocks, document)
+    return blocks
+
+
+def _add_current_reading(blocks: list[tuple[str, str]], document: dict) -> bool:
+    before = len(blocks)
+    insight = document.get("insight") if isinstance(document.get("insight"), dict) else {}
+    _add_block(
+        blocks,
+        "Короткий вывод",
+        _paragraphs(insight.get("title") or insight.get("headline"), insight.get("body"), insight.get("basis")),
+    )
+    scoring = document.get("scoring") if isinstance(document.get("scoring"), dict) else {}
+    for key, title in _SCORE_TITLES:
+        row = scoring.get(key)
+        if isinstance(row, dict):
+            _add_block(blocks, title, _score_text(row))
+    deep = document.get("deep_dive") if isinstance(document.get("deep_dive"), dict) else {}
+    sections = deep.get("sections") if isinstance(deep.get("sections"), list) else []
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        _add_block(
+            blocks,
+            _text(section.get("section_title")) or "Тема разбора",
+            _paragraphs(section.get("headline"), section.get("body") or section.get("preview")),
+        )
+    conclusion = deep.get("conclusion") if isinstance(deep.get("conclusion"), dict) else {}
+    _add_block(
+        blocks,
+        "Главное о связи",
+        _paragraphs(
+            conclusion.get("headline"),
+            conclusion.get("body") or conclusion.get("summary"),
+        ),
+    )
+    names = _public_names(document)
+    cycles = document.get("active_cycles") if isinstance(document.get("active_cycles"), dict) else {}
+    people = cycles.get("persons") if isinstance(cycles.get("persons"), dict) else {}
+    for person_id in ("A", "B"):
+        row = people.get(person_id)
+        if isinstance(row, dict):
+            _add_block(blocks, f"Цикл · {names[person_id]}", _cycle_text(row))
+    pair = document.get("pair_card") if isinstance(document.get("pair_card"), dict) else {}
+    _add_block(blocks, "Карта пары", _pair_text(pair))
+    return len(blocks) > before
+
+
+def _add_legacy_reading(blocks: list[tuple[str, str]], document: dict) -> None:
+    bond = document.get("bond") if isinstance(document.get("bond"), dict) else {}
+    insights = bond.get("insights") if isinstance(bond.get("insights"), list) else []
+    for insight in insights:
+        if not isinstance(insight, dict):
+            continue
+        category = str(insight.get("category") or "")
+        _add_block(
+            blocks,
+            _text(insight.get("title")) or CATEGORY_TITLE.get(category, "Связка"),
+            _paragraphs(insight.get("snapshot"), insight.get("summary"), insight.get("deep_read")),
+        )
+    signs = document.get("signs") if isinstance(document.get("signs"), dict) else {}
+    comparisons = signs.get("comparisons") if isinstance(signs.get("comparisons"), list) else []
+    for row in comparisons:
+        if not isinstance(row, dict):
+            continue
+        point = str(row.get("point") or "")
+        _add_block(
+            blocks,
+            f"Знаки · {BODY_RU.get(point, point or 'положение')}",
+            _paragraphs(row.get("meaning"), row.get("common_ground"), row.get("difference")),
+        )
+
+
+def _add_block(blocks: list[tuple[str, str]], title: str, text: str) -> None:
+    if text:
+        blocks.append((title, text))
+
+
+def _score_text(row: dict) -> str:
+    percent = ""
+    value = row.get("value")
+    if isinstance(value, (int, float)) and row.get("status") not in {"pending", "unavailable", "error"}:
+        percent = f"{round(value)}%"
+    return _paragraphs(percent, row.get("summary"))
+
+
+def _cycle_text(row: dict) -> str:
+    interpretation = row.get("interpretation") if isinstance(row.get("interpretation"), dict) else {}
+    if row.get("status") != "ready" or not interpretation:
+        return _EMPTY_CYCLE
+    body = _text(interpretation.get("body")) or _paragraphs(
+        interpretation.get("teaser"),
+        interpretation.get("focus"),
+        interpretation.get("sensitive_point"),
+        interpretation.get("need"),
+        interpretation.get("resource"),
+        interpretation.get("relationship_lens"),
+    )
+    return _paragraphs(interpretation.get("headline"), interpretation.get("astrological_basis_ru"), body)
+
+
+def _pair_text(pair: dict) -> str:
+    if pair.get("status") not in {None, "ready"}:
+        return ""
+    card = pair.get("card") if isinstance(pair.get("card"), dict) else {}
+    love = pair.get("love") if isinstance(pair.get("love"), dict) else {}
+    title = _text(love.get("name") or card.get("name"))
+    upright = _text(love.get("upright"))
+    shadow = _text(love.get("reversed"))
+    parts = [title]
+    if upright:
+        parts.append(f"Главная тема отношений\n{upright}")
+    if shadow:
+        parts.append(f"Теневая сторона\n{shadow}")
+    return _paragraphs(*parts)
+
+
+def _public_names(document: dict) -> dict[str, str]:
+    names = {"A": "Ты", "B": "Партнёр"}
+    people = document.get("persons")
+    if not isinstance(people, list):
+        return names
+    for person in people:
+        if isinstance(person, dict) and person.get("id") in names:
+            name = _text(person.get("display_name"))
+            if name:
+                names[str(person["id"])] = name
+    return names
+
+
+def _reading_html(document: object) -> str:
+    blocks = _reading_blocks(document)
+    if not blocks:
+        return _EMPTY_READING
+    return format_html(
+        '<div style="max-width:46rem">{}</div>',
+        format_html_join(
+            "",
+            (
+                '<section style="margin:0 0 1.35rem">'
+                '<h3 style="margin:0 0 .35rem;font-size:13px">{}</h3>'
+                '<div style="white-space:pre-wrap;line-height:1.45">{}</div>'
+                "</section>"
+            ),
+            blocks,
+        ),
+    )
+
+
 def _person_detail(person: dict | None) -> str:
     if not person:
         return "—"
@@ -295,6 +477,7 @@ class CompatibilityReportAdmin(admin.ModelAdmin):
         "entered_pair",
         "relationship_type",
         "reference_date",
+        "written_reading",
         "id",
         "input_hash",
         "private_input",
@@ -304,6 +487,10 @@ class CompatibilityReportAdmin(admin.ModelAdmin):
         (
             "Что ввели",
             {"fields": ("created_at", "entered_pair", "relationship_type", "reference_date")},
+        ),
+        (
+            "Что написали",
+            {"fields": ("written_reading",)},
         ),
         (
             "Служебное",
@@ -352,6 +539,10 @@ class CompatibilityReportAdmin(admin.ModelAdmin):
     @admin.display(description="Партнёр")
     def person_b(self, obj: CompatibilityReport) -> str:
         return _person_line(_compatibility_people(obj).get("B"))
+
+    @admin.display(description="Интерпретация")
+    def written_reading(self, obj: CompatibilityReport) -> str:
+        return _reading_html(obj.public_document)
 
     @admin.display(description="Пара")
     def entered_pair(self, obj: CompatibilityReport) -> str:
